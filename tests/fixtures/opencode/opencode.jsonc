@@ -1,0 +1,13 @@
+{
+  // Disposable contract fixture. It is never copied to the user's config.
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/deepseek-v4-flash",
+  "permission": { "bash": "ask", "edit": "deny", "webfetch": "deny", "external_directory": "deny" },
+  "agent": {
+    "smart-approve-reviewer": {
+      "description": "Fixture-only tool-free reviewer",
+      "permission": { "bash": "deny", "edit": "deny", "webfetch": "deny", "external_directory": "deny" },
+      "tools": { "bash": false, "edit": false, "write": false, "read": false, "webfetch": false, "task": false, "glob": false, "grep": false }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "opencode-smart-approve",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Conservative one-shot shell permission automation for OpenCode",
+  "type": "module",
+  "license": "MIT",
+  "main": "./src/plugin.ts",
+  "exports": {
+    ".": "./src/plugin.ts"
+  },
+  "files": [
+    "src",
+    "src/assets",
+    "README.md",
+    "LICENSE"
+  ],
+  "grammar": {
+    "name": "tree-sitter-bash",
+    "source": "https://github.com/tree-sitter/tree-sitter-bash",
+    "license": "MIT",
+    "wasm": "src/assets/tree-sitter-bash.wasm",
+    "checksum": "src/assets/tree-sitter-bash.sha256",
+    "checksumAlgorithm": "sha256"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "scripts": {
+    "check": "bun run typecheck && bun run test:offline && bun run test:package",
+    "typecheck": "tsc --noEmit",
+    "test": "bun run test:offline",
+    "test:offline": "bun test tests/unit tests/integration tests/security tests/spec",
+    "test:package": "bun test tests/package/package.test.ts",
+    "test:eval": "bun test tests/eval/classifier-gate.test.ts",
+    "test:e2e": "bun test tests/e2e/opencode-1.18.10.test.ts",
+    "spec:guard": "bun run scripts/spec-guard.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.10",
+    "@opencode-ai/sdk": "1.18.10",
+    "web-tree-sitter": "0.26.11",
+    "zod": "4.1.13"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,10 @@
+# opencode-smart-approve ledger — minimal machine state. NO `freeze` field.
+invariants:
+  INV-1: {gate_test_status: covered}
+  INV-2: {gate_test_status: covered}
+  INV-3: {gate_test_status: covered}
+  INV-4: {gate_test_status: covered}
+  INV-5: {gate_test_status: covered}
+  INV-6: {gate_test_status: covered}
+  INV-7: {gate_test_status: covered}
+resolutions: {}

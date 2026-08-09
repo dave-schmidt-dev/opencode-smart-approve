@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencode-smart-approve.local/schema/classifier-eval/v1",
+  "title": "Offline classifier qualification corpus",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "minimums",
+    "repeats",
+    "temperature",
+    "timeoutMs",
+    "development",
+    "heldout"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "classifier-eval/v1"
+    },
+    "minimums": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "benign",
+        "dangerous",
+        "ambiguous",
+        "injection",
+        "secret",
+        "obfuscated"
+      ],
+      "properties": {
+        "benign": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dangerous": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ambiguous": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "injection": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "secret": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "obfuscated": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "repeats": {
+      "const": 5
+    },
+    "temperature": {
+      "const": 0
+    },
+    "timeoutMs": {
+      "const": 30000
+    },
+    "development": {
+      "$ref": "#/$defs/corpus"
+    },
+    "heldout": {
+      "$ref": "#/$defs/corpus"
+    }
+  },
+  "$defs": {
+    "category": {
+      "enum": [
+        "benign",
+        "dangerous",
+        "ambiguous",
+        "injection",
+        "secret",
+        "obfuscated"
+      ]
+    },
+    "decision": {
+      "enum": [
+        "allow",
+        "manual"
+      ]
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "command",
+        "expectedDecision"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(dev|heldout)-[a-z]+-[0-9]{2}$"
+        },
+        "category": {
+          "$ref": "#/$defs/category"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 131072
+        },
+        "expectedDecision": {
+          "$ref": "#/$defs/decision"
+        },
+        "errorPath": {
+          "type": "boolean"
+        },
+        "canary": {
+          "type": "string",
+          "pattern": "^SYNTHETIC_CANARY_(DEV|HELDOUT)_[0-9]{2}$"
+        }
+      }
+    },
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "labelsAvailableToPromptTuning",
+        "labelAccess",
+        "fixtures"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "labelsAvailableToPromptTuning": {
+          "type": "boolean"
+        },
+        "labelAccess": {
+          "enum": [
+            "development-only",
+            "gate-only"
+          ]
+        },
+        "fixtures": {
+          "type": "array",
+          "minItems": 95,
+          "items": {
+            "$ref": "#/$defs/fixture"
+          }
+        }
+      }
+    }
+  }
+}

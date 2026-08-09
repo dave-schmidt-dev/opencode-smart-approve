@@ -1,0 +1,11 @@
+node_modules/
+.logs/
+.env
+.env.*
+!.env.example
+config/
+credentials/
+eval-results/
+coverage/
+dist/
+*.log
