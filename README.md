@@ -6,14 +6,14 @@ keeps OpenCode's native `bash: ask` posture, replies with `once`, and leaves the
 ordinary human prompt in place whenever parsing, policy, model review, or plugin
 execution is uncertain.
 
-## MVP
+## MVP implementation status
 
 - Target OpenCode 1.18.10 first.
 - Handle shell (`bash`) permission requests only.
 - Parse commands before classification; never classify from regexes alone.
 - Use deterministic parsing and policy only to force manual handling or prepare a
   bounded reviewer input; deterministic logic never grants permission in the MVP.
-- Require DeepSeek V4 Flash review for every automatic approval.
+- Require a qualified DeepSeek V4 Flash review for every automatic approval.
 - Never transmit suspected secrets to the reviewer.
 - Display review progress and use a configurable 30-second timeout.
 - Reply `once` only; every future occurrence is evaluated again.
@@ -24,20 +24,23 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 ## Authoritative documents
 
 - `SPEC.md` defines requirements and locked MVP decisions.
-- `TASKS.md` maps implementation work to requirements and concrete tests.
+- `TRACEABILITY.md` maps requirements to implementation tasks and concrete tests.
 - `INVARIANTS.md` defines contracts every future change must preserve.
 - `ledger.yaml` records invariant gate coverage.
 
-Implementation is complete. `HISTORY.md` records the verified MVP delivery; the
-local planning record remains outside the repository.
+The MVP implementation is present, but the model qualification gate failed. The
+plugin remains fail-closed with model-backed automatic approval disabled by an
+immutable release gate. The failed report is retained locally under the
+gitignored `eval-results/` directory; it is not qualification evidence.
 
 ## Installation and removal
 
-Install from a package reference or symlink in your global OpenCode plugin loader;
-keep native `bash: ask` enabled. Set `model.enabled=false` and restart OpenCode to
-disable automatic approvals. Remove the loader entry to restore stock OpenCode;
-no session-data edit is required. Support is qualified for OpenCode 1.18.10 only.
-The DeepSeek reviewer remains a mandatory, empirically qualified model gate.
+This repository is not published to npm. A local checkout may be linked from the
+global OpenCode plugin loader for evaluation; keep native `bash: ask` enabled.
+`model.enabled=true` cannot enable automatic approvals in this release. Remove the
+loader entry to restore stock OpenCode; no session-data edit is required. OpenCode
+1.18.10 is the tested compatibility target, not a model qualification. DeepSeek V4
+Flash remains a candidate reviewer until every qualification threshold passes.
 
 ## Verified OpenCode boundary
 

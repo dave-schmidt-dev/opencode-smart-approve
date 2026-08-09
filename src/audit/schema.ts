@@ -68,7 +68,9 @@ export function createAuditRecord(input: AuditRecordInput): AuditRecord {
     : sha256(input.requestID ?? "unknown-request");
   const commandShapeHash = input.commandShapeHash && /^[a-f0-9]{64}$/.test(input.commandShapeHash)
     ? input.commandShapeHash
-    : sha256(input.commandShape ?? input.command ?? "unknown-command");
+    // A raw command is accepted only so callers can hand an untrusted object
+    // to this boundary. It is never persisted or used as hash material.
+    : sha256(input.commandShape ?? "unknown-command-shape");
   const candidate = {
     timestamp,
     requestHash,

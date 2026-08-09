@@ -12,6 +12,7 @@ export type SecretReasonCode =
   | "sensitive_path"
   | "configured_secret_pattern"
   | "configured_sensitive_path"
+  | "prompt_injection"
   | "detector_error";
 
 export interface SecretMatch {
@@ -46,9 +47,10 @@ export interface SecretScanResult {
   readonly commandShape: string;
 }
 
-const NAME_PATTERN = /(?:^|[\s;'"({])(?:export\s+)?(?:[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|PWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?|AUTH(?:ORIZATION)?)[A-Z0-9_-]*|(?:SECRET|TOKEN|PASSWORD|PASSWD|PWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?|AUTH(?:ORIZATION)?)[A-Z0-9_-]*)\s*=\s*[^\s;&|)]+/gi;
-const FLAG_PATTERN = /(?:^|[\s])(?:--?(?:api[-_]?key|access[-_]?key|secret|token|password|passwd|pwd|credential|auth(?:orization)?)(?:[=\s]+)(?:"[^"]*"|'[^']*'|[^\s;&|]+))/gi;
+const NAME_PATTERN = /(?:^|[\s;'"({])((?:export\s+)?(?:[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|PWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?|AUTH(?:ORIZATION)?)[A-Z0-9_-]*|(?:SECRET|TOKEN|PASSWORD|PASSWD|PWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?|AUTH(?:ORIZATION)?)[A-Z0-9_-]*)\s*=\s*[^\s;&|)]+)/gi;
+const FLAG_PATTERN = /(?:^|[\s])((?:--?(?:api[-_]?key|access[-_]?key|secret|token|password|passwd|pwd|credential|auth(?:orization)?)(?:[=\s]+)(?:"[^"]*"|'[^']*'|[^\s;&|]+)))/gi;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const PROMPT_INJECTION_PATTERN = /(?:\b(?:ignore|disregard|override)\b[^\n;|]{0,80}\b(?:instructions?|policy|prompt|rules?)\b|\b(?:system|developer)\s+(?:message|prompt)\b|\byou\s+are\s+now\b|\bjailbreak\b|<\/?system>|\[\s*system\s*\])/gi;
 const TOKEN_PATTERNS: readonly RegExp[] = [
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\b(?:ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}\b/g,
@@ -61,7 +63,7 @@ const TOKEN_PATTERNS: readonly RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
   BEARER_PATTERN,
 ];
-const PATH_TOKEN_PATTERN = /(?:^|[\s=:(,])((?:~|\$HOME|\$USER|\.|\/)[^\s;|&()<>"']+|(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+)/g;
+const PATH_TOKEN_PATTERN = /(?:^|[\s=:(,'"])((?:~|\$HOME|\$USER|\.|\/)[^\s;|&()<>"']+|(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+)/g;
 
 /**
  * Scan command text before any provider/reviewer construction.
@@ -90,8 +92,9 @@ export function scanForSecrets(
       ...(options.secretPatterns ?? []),
     ].map(compileCommandPattern);
     const matches: SecretMatch[] = [];
-    collectRegexMatches(NAME_PATTERN, command, "credential_name", matches);
-    collectRegexMatches(FLAG_PATTERN, command, "secret_flag", matches);
+    collectRegexMatches(NAME_PATTERN, command, "credential_name", matches, 1);
+    collectRegexMatches(FLAG_PATTERN, command, "secret_flag", matches, 1);
+    collectRegexMatches(PROMPT_INJECTION_PATTERN, command, "prompt_injection", matches);
     for (const pattern of TOKEN_PATTERNS) collectRegexMatches(pattern, command, "token_format", matches);
     for (const pattern of configuredPatterns) collectRegexMatches(pattern, command, "configured_secret_pattern", matches);
 
@@ -146,17 +149,30 @@ export const scanSecretBoundary = scanForSecrets;
 export const classifySecretBoundary = scanForSecrets;
 
 function compileCommandPattern(pattern: SensitivePathPattern): RegExp {
-  if (pattern instanceof RegExp) return pattern;
+  if (pattern instanceof RegExp) {
+    // `exec` iteration requires a global expression. Clone caller-owned
+    // expressions so we never mutate their lastIndex or hang on a non-global
+    // configured detector.
+    return new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+  }
   if (typeof pattern !== "string" || pattern.length === 0) throw new TypeError("secret patterns must be non-empty");
   return new RegExp(escapeRegExp(pattern), "g");
 }
 
-function collectRegexMatches(pattern: RegExp, command: string, reason: SecretReasonCode, matches: SecretMatch[]): void {
+function collectRegexMatches(
+  pattern: RegExp,
+  command: string,
+  reason: SecretReasonCode,
+  matches: SecretMatch[],
+  captureGroup?: number,
+): void {
   pattern.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(command)) !== null) {
-    const start = match.index;
-    matches.push({ reason, start, end: start + match[0].length });
+    const value = captureGroup === undefined ? match[0] : match[captureGroup];
+    if (value === undefined) throw new TypeError("secret pattern capture is missing");
+    const start = match.index + match[0].lastIndexOf(value);
+    matches.push({ reason, start, end: start + value.length });
     if (match[0].length === 0) pattern.lastIndex += 1;
   }
 }

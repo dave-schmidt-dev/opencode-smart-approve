@@ -83,6 +83,8 @@ export interface ProgressReporterOptions {
   readonly timer?: ProgressTimer;
   readonly metrics?: ProgressMetrics;
   readonly onStatus?: (status: ProgressStatus) => void;
+  /** Injectable monotonic-enough clock for deterministic latency tests. */
+  readonly now?: () => number;
 }
 
 export const MIN_REVIEW_TIMEOUT_MS = 10_000;
@@ -109,16 +111,19 @@ export function createProgressReporter(options: ProgressReporterOptions): Progre
   }
   if (options.timeoutMs !== undefined) validateReviewTimeout(options.timeoutMs);
   const timer = options.timer ?? globalThis;
+  const now = options.now ?? Date.now;
   let handle: unknown;
   let startedAt = 0;
+  let started = false;
   let finished = false;
-  let updates = 0;
 
-  const emit = (message: string, variant: ProgressVariant, duration?: number): void => {
+  const emit = (
+    phase: ProgressStatus["phase"],
+    message: string,
+    variant: ProgressVariant,
+    duration?: number,
+  ): void => {
     const bounded = safeMessage(message);
-    const phase: ProgressStatus["phase"] = variant === "info"
-      ? (updates === 0 ? "started" : "updated")
-      : "finished";
     try { options.onStatus?.({ phase, message: bounded, variant }); } catch { /* observers are non-authoritative */ }
     const showToast = options.sink?.tui?.showToast;
     if (!showToast) return;
@@ -134,30 +139,37 @@ export function createProgressReporter(options: ProgressReporterOptions): Progre
     } catch { /* a failing progress sink cannot affect a decision */ }
   };
 
+  const start = (): void => {
+    if (finished || started) return;
+    started = true;
+    startedAt = now();
+    options.metrics?.begin();
+    emit("started", `Reviewing command ${options.requestID}`, "info");
+    handle = timer.setInterval(() => update(), intervalMs);
+  };
+
   const update = (message = `Reviewing command ${options.requestID}`): void => {
     if (finished) return;
-    updates += 1;
+    if (!started) start();
+    if (finished) return;
     options.metrics?.heartbeat?.();
-    emit(message, "info");
+    emit("updated", message, "info");
   };
 
   return {
-    start: () => {
-      if (finished || handle !== undefined) return;
-      startedAt = Date.now();
-      options.metrics?.begin();
-      emit(`Reviewing command ${options.requestID}`, "info");
-      handle = timer.setInterval(() => update(), intervalMs);
-    },
+    start,
     update,
     finish: (variant, message) => {
       if (finished) return;
+      // Defensive callers may finish before start. Preserve the public
+      // initial/terminal contract and record bounded latency from this call.
+      if (!started) start();
       finished = true;
       if (handle !== undefined) timer.clearInterval(handle as never);
       handle = undefined;
-      options.metrics?.finish(variant, Math.max(0, Date.now() - startedAt));
+      options.metrics?.finish(variant, Math.max(0, now() - startedAt));
       if (/\btime(?:d out|out)\b/i.test(message)) options.metrics?.timeout?.();
-      emit(message, variant, 5_000);
+      emit("finished", message, variant, 5_000);
     },
     dispose: () => {
       if (handle !== undefined) timer.clearInterval(handle as never);

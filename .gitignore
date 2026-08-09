@@ -3,9 +3,11 @@ node_modules/
 .env
 .env.*
 !.env.example
-config/
-credentials/
-eval-results/
+/config/
+/credentials/
+/eval-results/
+/HISTORY.md
+/TASKS.md
 coverage/
 dist/
 *.log

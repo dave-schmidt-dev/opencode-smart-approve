@@ -1,6 +1,6 @@
 # SPEC: OpenCode Smart Approve
 
-Status: implemented MVP
+Status: implemented MVP; qualification blocked
 PlanningTier: impulse
 Target: OpenCode 1.18.10 on macOS and Linux
 License: MIT
@@ -9,16 +9,19 @@ License: MIT
 
 OpenCode Smart Approve reduces repetitive shell approval prompts without weakening
 OpenCode's native permission boundary. It automatically replies to a pending shell
-permission only when a mandatory constrained model review supports approval.
+permission only when a mandatory constrained model review supports approval. The
+current build has not qualified its candidate model, so model-backed automatic
+approval remains disabled.
 Deterministic parsing and policy may force manual handling but never grant permission
 in the MVP. Every uncertain outcome remains an ordinary human choice.
 
 ## 2. MVP audience and outcome
 
 The MVP is for a developer running OpenCode interactively who wants Codex- or
-Claude-like safe-command automation. Success means routine low-risk commands proceed
-without user action, every candidate command is reviewed by DeepSeek V4 Flash, and no
-error path can turn into an automatic approval.
+Claude-like safe-command automation. The intended success case is routine low-risk
+commands proceeding without user action, every candidate command being reviewed by
+a qualified DeepSeek V4 Flash reviewer, and no error path turning into an automatic
+approval. The current build does not meet that outcome: qualification failed.
 
 ## 3. Scope
 
@@ -262,6 +265,14 @@ shell command executed; manual states leave that decision with OpenCode and the 
   - [ ] Reports identify thresholds as empirical sample gates, not proof of a
     universal false-approval probability.
 
+Current gate result: **failed**. The retained live development report at
+`eval-results/classifier-qualification.failed.json` recorded 61/200 benign false
+manual decisions (limit 10), 8 ambiguous disagreements (limit 0), and 33 other
+disagreements (limit 1). Critical false approvals and canary leaks were zero, but
+that does not satisfy the complete gate. DeepSeek V4 Flash is not qualified and
+model-backed automatic approval must remain disabled until a new versioned run
+passes every threshold.
+
 ### REQ-012: Compatibility and packaging
 
 - Type: Quality
@@ -289,7 +300,7 @@ shell command executed; manual states leave that decision with OpenCode and the 
 - Priority: P0
 - Description: Requirements, tasks, tests, and invariants remain aligned.
 - Acceptance criteria:
-  - [ ] Every `REQ-###` maps to at least one `TASK-###` in `TASKS.md`.
+  - [ ] Every `REQ-###` maps to at least one `TASK-###` in `TRACEABILITY.md`.
   - [ ] Every requirement maps to at least one concrete test selector.
   - [ ] Every invariant's gate test exists before release.
   - [ ] The final check fails when a requirement, task, test, or invariant mapping
@@ -340,7 +351,8 @@ permission authority without schema, state, and deterministic hard-block checks.
 
 - A single request recovers by leaving the native prompt pending.
 - A bad configuration recovers by refusing plugin activation.
-- A bad model qualification recovers by disabling model-backed auto-approval.
+- A failed or stale model qualification recovers by disabling model-backed
+  auto-approval; the native prompt remains available.
 - A bad release recovers by removing the global plugin symlink/package entry;
   native `bash: ask` remains the baseline and no stored `always` rules require cleanup.
 
@@ -349,7 +361,8 @@ permission authority without schema, state, and deterministic hard-block checks.
 1. Shell permission requests only.
 2. Native `bash: ask` remains enabled.
 3. Every automatic approval requires model review; deterministic policy cannot grant.
-4. DeepSeek V4 Flash is the candidate default, not trusted until qualification.
+4. DeepSeek V4 Flash is the candidate default, not trusted until qualification;
+   the current qualification has failed and is not shipped as an approval gate.
 5. Repeated commands are re-evaluated and re-reviewed; verdicts are not cached.
 6. Automatic replies use `once` only.
 7. Default model timeout is 30 seconds and progress is visible.

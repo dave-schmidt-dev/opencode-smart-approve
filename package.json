@@ -32,8 +32,10 @@
     "test": "bun run test:offline",
     "test:offline": "bun test tests/unit tests/integration tests/security tests/spec",
     "test:package": "bun test tests/package/package.test.ts",
-    "test:eval": "bun test tests/eval/classifier-gate.test.ts",
-    "test:e2e": "bun test tests/e2e/opencode-1.18.10.test.ts",
+    "test:eval": "bun run scripts/classifier-gate.ts",
+    "test:eval:unit": "bun test tests/eval/classifier-gate.test.ts",
+    "qualify:live": "bun run scripts/classifier-gate.ts --live",
+    "test:e2e": "bun test tests/e2e/opencode-1.18.10.test.ts tests/e2e/opencode-contract-canary.test.ts",
     "spec:guard": "bun run scripts/spec-guard.ts"
   },
   "dependencies": {

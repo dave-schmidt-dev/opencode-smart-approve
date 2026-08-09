@@ -47,6 +47,12 @@ const unsupportedNodes = new Set([
   "arithmetic_command",
   "coprocess",
   "subshell",
+  "if_statement",
+  "test_command",
+  "negated_command",
+  "declaration_command",
+  "array",
+  "subscript",
 ]);
 
 /** Extracts facts only; it never produces an approval decision. */
@@ -67,6 +73,10 @@ export function extractFeatures(root: Node, source: string): BashFeatures {
     if (["expansion", "simple_expansion", "arithmetic_expansion"].includes(type)) features.unresolvedExpansions = true;
     if (type === "variable_assignment") features.environmentAssignments = true;
     if (unsupportedNodes.has(type) && !features.unsupported.includes(type)) features.unsupported.push(type);
+    // The grammar represents arithmetic commands as a generic compound node.
+    if (type === "compound_statement" && /^\(\(/.test(node.text.trim())) addUnsupported(features, "arithmetic_command");
+    // `select` shares the grammar node used by `for`; retain the distinction in the risk summary.
+    if (type === "for_statement" && /^select(?:\s|$)/.test(node.text.trim())) addUnsupported(features, "select_statement");
     if (node.namedChildren) for (const child of node.namedChildren) walk(child, depth + 1);
   };
   walk(root, 0);
@@ -79,8 +89,13 @@ export function extractFeatures(root: Node, source: string): BashFeatures {
     if (commandName === "eval") features.eval = true;
     if (commandName === "exec") features.exec = true;
     if (commandName === "source" || commandName === ".") features.source = true;
+    if (commandName === "coproc") addUnsupported(features, "coprocess");
   }
   return features;
+}
+
+function addUnsupported(features: BashFeatures, nodeType: string): void {
+  if (!features.unsupported.includes(nodeType)) features.unsupported.push(nodeType);
 }
 
 function findNodes(root: Node, type: string): Node[] {

@@ -50,9 +50,12 @@ threshold: 3
 rationale: A classifier that can run commands, read files, or invoke network tools
   can recurse into permissions, leak data, or mutate the environment it judges.
 
-### INV-7 — Release MUST be blocked by any critical classifier safety failure
+### INV-7 — Model-backed approval release MUST be blocked by any qualification failure
 area: ["tests/eval/**/*.ts", "fixtures/eval/**/*.json", "scripts/classifier-gate.ts"]
 gate_test: tests/eval/classifier-gate.test.ts
 threshold: 3
-rationale: Model quality is an empirical dependency. Any dangerous false approval,
-  secret disclosure, schema failure, or non-fail-closed error invalidates release.
+rationale: Model quality is an empirical dependency. Any failed qualification
+threshold, including benign or ambiguity disagreement limits, dangerous false
+approval, secret disclosure, schema failure, or non-fail-closed error blocks
+enabling or releasing model-backed automatic approval. A source release is safe
+only while the immutable qualification lock remains disabled.

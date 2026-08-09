@@ -36,6 +36,23 @@ describe("spec traceability", () => {
     }
   });
 
+  test("rejects an empty or stale repository task queue", () => {
+    const report = validateTraceability(process.cwd());
+    expect(report.errors).toEqual([]);
+    expect(report.tasks).toEqual([
+      "TASK-001",
+      "TASK-002",
+      "TASK-003",
+      "TASK-004",
+      "TASK-005",
+      "TASK-006",
+      "TASK-007",
+      "TASK-008",
+      "TASK-009",
+      "TASK-010",
+    ]);
+  });
+
   test("repository installs from the frozen Bun lockfile", () => {
     const root = mkdtempSync(join(tmpdir(), "smart-approve-install-"));
     copyFileSync(join(process.cwd(), "package.json"), join(root, "package.json"));

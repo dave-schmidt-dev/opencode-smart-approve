@@ -48,7 +48,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     }
   });
 
-  test("only a matching model allow auto-approves a candidate", async () => {
+  test("model approval remains disabled even for a matching allow result", async () => {
     const pending = new Set(["model-allow"]);
     const promptBodies: unknown[] = [];
     const reviewer = createReviewerAgent({
@@ -65,53 +65,49 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     try {
       await hooks.event({ event: asked("model-allow", "printf safe") });
       await tick();
-      const body = (promptBodies[0] as { body?: { model?: unknown } }).body;
-      expect(body?.model).toEqual({ providerID: "opencode-go", modelID: "deepseek-v4-flash" });
-      expect(pending.has("model-allow")).toBe(false);
-      expect(hooks.state("model-allow")).toBe("approved");
+      expect(promptBodies).toHaveLength(0);
+      expect(pending.has("model-allow")).toBe(true);
+      expect(hooks.state("model-allow")).toBe("manual");
     } finally {
       await hooks.dispose();
     }
   });
 
-  test("unsafe, timeout, and reviewer errors preserve the pending prompt", async () => {
+  test("unsafe and disabled-model requests preserve the pending prompt", async () => {
     const pending = new Set(["unsafe", "timeout", "error"]);
-    const timeoutHooks = createSmartApproveHooks({
-      reviewer: { review: () => new Promise(() => undefined) },
-      timeoutMs: 10,
-      approve: async (id) => { pending.delete(id); },
-    });
-    const errorHooks = createSmartApproveHooks({
-      reviewer: { review: async () => { throw new Error("provider unavailable"); } },
+    const review = mock(async () => { throw new Error("provider must not be called"); });
+    const hooks = createSmartApproveHooks({
+      reviewer: { review },
       approve: async (id) => { pending.delete(id); },
     });
     try {
-      await timeoutHooks.event({ event: asked("unsafe", "rm -rf /tmp/not-safe") });
-      await timeoutHooks.event({ event: asked("timeout", "printf waits") });
-      await errorHooks.event({ event: asked("error", "printf fails") });
+      await hooks.event({ event: asked("unsafe", "rm -rf /tmp/not-safe") });
+      await hooks.event({ event: asked("timeout", "printf waits") });
+      await hooks.event({ event: asked("error", "printf fails") });
       await tick(40);
       expect(pending.has("unsafe")).toBe(true);
       expect(pending.has("timeout")).toBe(true);
       expect(pending.has("error")).toBe(true);
-      expect(timeoutHooks.state("timeout")).toBe("timeout");
-      expect(errorHooks.state("error")).toBe("manual");
+      expect(hooks.state("unsafe")).toBe("manual");
+      expect(hooks.state("timeout")).toBe("manual");
+      expect(hooks.state("error")).toBe("manual");
+      expect(review).not.toHaveBeenCalled();
     } finally {
-      await timeoutHooks.dispose();
-      await errorHooks.dispose();
+      await hooks.dispose();
     }
   });
 
-  test("user-first race is stale and never retried", async () => {
+  test("disabled model does not attempt a user-first reply race", async () => {
     const reply = mock(async () => { throw new Error("permission not found"); });
     const hooks = createSmartApproveHooks({
-      reviewer: { review: async () => ({ decision: "allow" as const, sessionID: "race-review", toolCounters: ZERO_TOOL_COUNTERS }) },
+      reviewer: { review: async () => ({ decision: "allow" as const, requestID: "race", sessionID: "race-review", toolCounters: ZERO_TOOL_COUNTERS }) },
       approve: reply,
     });
     try {
       await hooks.event({ event: asked("race", "printf race") });
       await tick();
-      expect(reply).toHaveBeenCalledTimes(1);
-      expect(hooks.state("race")).toBe("stale");
+      expect(reply).not.toHaveBeenCalled();
+      expect(hooks.state("race")).toBe("manual");
     } finally {
       await hooks.dispose();
     }

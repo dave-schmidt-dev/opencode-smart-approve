@@ -12,7 +12,8 @@ export type ApprovalState =
 
 export interface ApprovalRequestRecord {
   readonly requestID: string;
-  readonly command: string;
+  /** Raw command text is never retained in the long-lived request store. */
+  readonly commandHash: string;
   readonly sessionID?: string;
   state: ApprovalState;
   replyAttempted: boolean;
@@ -65,7 +66,7 @@ export class ApprovalStateStore {
     if (!requestID || this.records.has(requestID)) return undefined;
     const record: ApprovalRequestRecord = {
       requestID,
-      command,
+      commandHash: hashCommand(command),
       ...(sessionID ? { sessionID } : {}),
       state: "received",
       replyAttempted: false,
@@ -85,3 +86,9 @@ export class ApprovalStateStore {
     return [...this.records.values()];
   }
 }
+
+/** Compare request identity without retaining command bytes after processing. */
+export function hashCommand(command: string): string {
+  return createHash("sha256").update(command, "utf8").digest("hex");
+}
+import { createHash } from "node:crypto";

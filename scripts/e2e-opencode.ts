@@ -20,6 +20,7 @@ export interface OpenCodeProcessResult {
 }
 
 const decoder = new TextDecoder();
+const opencodeBinary = (): string => process.env.OPENCODE_BIN ?? "opencode";
 
 /**
  * Create a disposable XDG layout. Nothing is written below the real user
@@ -59,7 +60,7 @@ export async function createDisposableOpenCode(options: {
 
 /** Run only the local installed OpenCode binary's version probe. */
 export function runOpenCodeVersion(options: { readonly configHome: string; readonly dataHome: string; readonly stateHome: string }): OpenCodeProcessResult {
-  const result = Bun.spawnSync(["opencode", "--version"], {
+  const result = Bun.spawnSync([opencodeBinary(), "--version"], {
     env: {
       ...process.env,
       XDG_CONFIG_HOME: options.configHome,

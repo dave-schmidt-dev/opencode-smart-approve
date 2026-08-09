@@ -51,25 +51,13 @@ export function compileSensitivePathPattern(pattern: SensitivePathPattern): RegE
   if (typeof pattern !== "string" || pattern.length === 0) {
     throw new TypeError("sensitive path patterns must be non-empty strings or regular expressions");
   }
-  // Match path separators consistently and permit a leading home-variable or
-  // absolute prefix. `**` crosses separators; `*` does not.
-  let source = "";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    if (char === "*" && pattern[index + 1] === "*") {
-      source += ".*";
-      index += 1;
-    } else if (char === "*") {
-      source += "[^/]*";
-    } else if (char === "?") {
-      source += "[^/]";
-    } else if (char === "/") {
-      source += "[/\\\\]";
-    } else {
-      source += escapeRegExp(char);
-    }
-  }
-  return new RegExp(`(?:^|[/\\\\])${source}$`, "i");
+  // Normalize separators before compiling. A leading `**/` is an optional
+  // directory prefix, so it must also match a root/relative basename such as
+  // `.env`; requiring a separator here was the source of the original miss.
+  const normalizedPattern = pattern.replace(/\\/g, "/");
+  const hasDirectoryPrefix = normalizedPattern.startsWith("**/");
+  const source = globToSource(hasDirectoryPrefix ? normalizedPattern.slice(3) : normalizedPattern);
+  return new RegExp(`^(?:.*/)?${source}$`, "i");
 }
 
 /** Create a matcher and validate configured additions up front. */
@@ -99,8 +87,8 @@ export function isSensitivePath(
 export function normalizePathToken(path: string): string {
   return path
     .trim()
-    .replace(/^['"]|['"]$/g, "")
-    .replace(/^\.\//, "")
+    .replace(/^(['"])(.*)\1$/, "$2")
+    .replace(/^(?:\.\/)+/, "")
     .replace(/\\/g, "/");
 }
 
@@ -111,4 +99,22 @@ function testRegex(pattern: RegExp, value: string): boolean {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function globToSource(pattern: string): string {
+  let source = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "*" && pattern[index + 1] === "*") {
+      source += ".*";
+      index += 1;
+    } else if (char === "*") {
+      source += "[^/]*";
+    } else if (char === "?") {
+      source += "[^/]";
+    } else {
+      source += escapeRegExp(char);
+    }
+  }
+  return source;
 }

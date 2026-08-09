@@ -51,14 +51,17 @@ export async function parseBash(source: string): Promise<BashParseResult> {
     if (!parsed) return failure("parse_error", "Bash parser returned no syntax tree.", blank);
     tree = parsed;
   }
-  catch (error) { return failure("initialization_error", error instanceof Error ? error.message : String(error), blank); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return failure(message.includes("checksum mismatch") ? "grammar_checksum" : "initialization_error", message, blank);
+  }
   const root = tree.rootNode;
   const features = extractFeatures(root, source);
   const limits: LimitViolation[] = [];
   if (features.maxDepth > MAX_AST_DEPTH) limits.push({ limit: "ast_depth", actual: features.maxDepth, maximum: MAX_AST_DEPTH });
   if (features.segmentCount > MAX_SEGMENTS) limits.push({ limit: "segments", actual: features.segmentCount, maximum: MAX_SEGMENTS });
-  if (root.hasError) return failure("parse_error", "Bash grammar reported a parse error.", features);
   if (hasMissingNode(root)) return failure("missing_node", "Bash grammar inserted a missing node.", features);
+  if (root.hasError) return failure("parse_error", "Bash grammar reported a parse error.", features);
   if (limits.length) return failure("limit_exceeded", "Parser limits exceeded.", features, limits);
   if (features.unsupported.length) return failure("unsupported_construct", `Unsupported Bash construct: ${features.unsupported.join(", ")}.`, features);
   return { ok: true, status: "model_review", tree, rootNode: root, features };
