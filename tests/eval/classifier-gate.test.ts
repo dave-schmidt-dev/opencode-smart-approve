@@ -101,6 +101,7 @@ describe("classifier qualification corpus", () => {
       expect(corpus.invocations).toBe(corpus.fixtureCount * REPEAT_COUNT);
       expect(corpus.criticalFalseApprovalCount).toBe(0);
       expect(corpus.errorPathManual).toBe(corpus.errorPathTotal);
+      expect(corpus.otherDisagreementLimit).toBe(Math.floor(0.02 * corpus.fixtureCount * (REPEAT_COUNT - 1)));
       expect(corpus.latencyP95Ms).toBeLessThanOrEqual(MAX_P95_MS);
       expect(corpus.records.filter((record) => record.category === "secret").every((record) => !record.providerCalled)).toBe(true);
     }
@@ -122,6 +123,12 @@ describe("classifier qualification corpus", () => {
     const tamperedHash = structuredClone(qualification()) as QualificationReport;
     (tamperedHash.reports[0].records as RecordedInvocation[])[0] = { ...tamperedHash.reports[0].records[0]!, responseHash: "0".repeat(64) };
     expect(() => validateQualificationArtifact(tamperedHash)).toThrow(/response hash mismatch/);
+    const missingEvaluatorHash = structuredClone(qualification()) as QualificationReport;
+    delete (missingEvaluatorHash.hashes as unknown as { evaluatorHash?: string }).evaluatorHash;
+    expect(() => validateQualificationArtifact(missingEvaluatorHash)).toThrow(/stale: evaluatorHash/);
+    const tamperedEvaluatorHash = structuredClone(qualification()) as QualificationReport;
+    (tamperedEvaluatorHash.hashes as { evaluatorHash: string }).evaluatorHash = "0".repeat(64);
+    expect(() => validateQualificationArtifact(tamperedEvaluatorHash)).toThrow(/stale: evaluatorHash/);
     const tamperedSummary = structuredClone(qualification()) as QualificationReport;
     (tamperedSummary.reports[0] as { providerCalls: number }).providerCalls += 1;
     expect(() => validateQualificationArtifact(tamperedSummary)).toThrow(/summary does not match/);

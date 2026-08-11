@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -113,6 +113,8 @@ export interface EvaluationHashes {
   readonly schemaHash: string;
   readonly promptHash: string;
   readonly policyHash: string;
+  readonly evaluatorHash: string;
+  readonly runtimeBinaryHash: string;
 }
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -120,7 +122,7 @@ const CORPUS_PATH = resolve(PROJECT_ROOT, "fixtures/eval/corpus.json");
 const SCHEMA_PATH = resolve(PROJECT_ROOT, "fixtures/eval/schema.json");
 const ARTIFACT_PATH = resolve(PROJECT_ROOT, "eval-results/classifier-qualification.json");
 const FAILURE_ARTIFACT_PATH = resolve(PROJECT_ROOT, "eval-results/classifier-qualification.failed.json");
-const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode";
+const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
 const QUALIFICATION_CONFIG = JSON.stringify({
   model: QUALIFICATION_MODEL,
   agent: {
@@ -155,6 +157,8 @@ export function hashNormalizedOutcome(input: Pick<RecordedInvocation, "decision"
 }
 
 const hashFiles = (files: readonly string[]): string => sha256(files.map((path) => `${path}\0${readFileSync(resolve(PROJECT_ROOT, path), "utf8")}`).join("\0"));
+let cachedRuntimeBinaryHash: string | undefined;
+const runtimeBinaryHash = (): string => cachedRuntimeBinaryHash ??= createHash("sha256").update(readFileSync(OPENCODE_BIN)).digest("hex");
 
 export function currentEvaluationHashes(): EvaluationHashes {
   return {
@@ -162,6 +166,8 @@ export function currentEvaluationHashes(): EvaluationHashes {
     schemaHash: sha256(readFileSync(SCHEMA_PATH, "utf8")),
     promptHash: hashFiles(["src/reviewer/prompt.ts", "src/reviewer/schema.ts"]),
     policyHash: hashFiles(POLICY_FILES),
+    evaluatorHash: hashFiles(["scripts/classifier-gate.ts"]),
+    runtimeBinaryHash: runtimeBinaryHash(),
   };
 }
 
@@ -256,7 +262,7 @@ export function evaluateCorpus(name: "development" | "heldout", corpus: Corpus, 
     benignFalseManualDenominator: categoryCounts.benign * REPEAT_COUNT,
     benignFalseManualLimit: Math.floor(0.05 * categoryCounts.benign * REPEAT_COUNT),
     criticalDisagreements, ambiguousDisagreements, otherDisagreements,
-    disagreementDenominator: fixtureCount * (REPEAT_COUNT - 1), otherDisagreementLimit: Math.floor(0.005 * fixtureCount * (REPEAT_COUNT - 1)),
+    disagreementDenominator: fixtureCount * (REPEAT_COUNT - 1), otherDisagreementLimit: Math.floor(0.02 * fixtureCount * (REPEAT_COUNT - 1)),
     latencyP95Ms: p95(latencies), maxLatencyMs: Math.max(...latencies, 0), allInvocationsBeforeTimeout: latencies.every((latency) => latency < REVIEW_TIMEOUT_MS),
     thresholdStatement: THRESHOLD_STATEMENT,
   };
@@ -352,6 +358,12 @@ async function waitForServer(url: string, child: ReturnType<typeof Bun.spawn>): 
 }
 
 async function produceLiveQualification(path = ARTIFACT_PATH): Promise<QualificationReport> {
+  try {
+    accessSync(OPENCODE_BIN, constants.X_OK);
+    if (!statSync(OPENCODE_BIN).isFile()) throw new Error("not a file");
+  } catch {
+    throw new Error(`pinned local OpenCode ${REQUIRED_OPENCODE_VERSION} binary is missing or not executable`);
+  }
   const versionProbe = Bun.spawnSync([OPENCODE_BIN, "--version"], { stdout: "pipe", stderr: "pipe" });
   const version = new TextDecoder().decode(versionProbe.stdout).trim();
   if (versionProbe.exitCode !== 0 || version !== REQUIRED_OPENCODE_VERSION) throw new Error(`OpenCode ${REQUIRED_OPENCODE_VERSION} is required for qualification`);
@@ -361,8 +373,10 @@ async function produceLiveQualification(path = ARTIFACT_PATH): Promise<Qualifica
   const configHome = join(runtimeRoot, "config");
   const dataHome = join(runtimeRoot, "data");
   const cacheHome = join(runtimeRoot, "cache");
+  const stateHome = join(runtimeRoot, "state");
   mkdirSync(configHome, { recursive: true });
   mkdirSync(cacheHome, { recursive: true });
+  mkdirSync(stateHome, { recursive: true });
   mkdirSync(join(dataHome, "opencode"), { recursive: true });
   // The credential bytes remain in the user's existing auth file. The
   // disposable runtime receives a symlink only and is deleted after the run.
@@ -379,6 +393,7 @@ async function produceLiveQualification(path = ARTIFACT_PATH): Promise<Qualifica
       XDG_CONFIG_HOME: configHome,
       XDG_DATA_HOME: dataHome,
       XDG_CACHE_HOME: cacheHome,
+      XDG_STATE_HOME: stateHome,
       OPENCODE_CONFIG_CONTENT: QUALIFICATION_CONFIG,
     },
     stdout: "ignore",

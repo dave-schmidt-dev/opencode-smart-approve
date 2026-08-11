@@ -3,6 +3,26 @@
 > System contract. The harvest tool reads `area:` globs to map HISTORY bug entries
 > to invariants.
 
+## Foundation-freeze waivers
+
+- **2026-08-10 — Option 3 planning only:** The owner explicitly waived the active
+  INV-7 recurrence freeze for planning the bounded stall-timeout auto-reject
+  proposal. This does not waive INV-7, enable model-backed approval, authorize
+  implementation, or relax any qualification threshold.
+
+- **2026-08-10 — Mutable reviewer alias:** The owner explicitly waived immutable
+  provider revision identity for the classifier-qualification recovery plan.
+  Evidence may bind the requested `opencode-go/deepseek-v4-flash` alias and
+  requested `max` variant while stating that provider weights and served variant
+  are unattested. This does not waive INV-7, authorize implementation or
+  enablement, relax thresholds, or permit tuning after candidate freeze.
+
+- **2026-08-11 — Pre-execution replan planning only:** The owner explicitly waived
+  the INV-7 recurrence freeze for completing the reviewed deny-and-replan plan
+  based on `tool.execute.before`. This does not waive INV-7, enable model-backed
+  approval, authorize deny-and-replan implementation, or relax any
+  qualification threshold.
+
 ## Standing invariants
 
 ### INV-1 — Model review and other perceptible waits MUST surface live progress

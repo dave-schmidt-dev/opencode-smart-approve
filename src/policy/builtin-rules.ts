@@ -67,7 +67,7 @@ function dangerousCommand(context: BuiltinRuleContext): boolean {
   if (context.features.redirects) return true;
   const command = context.command;
   const executables = commandExecutables(command);
-  if (executables.some((executable) => executable === "rm" || executable === "tee" || executable === "mkdir")) return true;
+  if (executables.some((executable) => executable === "rm" || executable === "tee" || executable === "mkdir" || executable === "less")) return true;
   if (/(?:^|\s)xargs\b[^;&|]*(?:^|\s)(?:rm|git\s+(?:reset|clean|checkout|restore))(?:\s|$)/.test(command)) return true;
   if (/(?:^|\s)find\b[^;&|]*(?:^|\s)-delete(?:\s|$)/.test(command)) return true;
   if (/(?:^|\s)sed\b[^;&|]*(?:^|\s)-(?:i|[^\s]*i[^\s]*)(?:\s|$)/.test(command)) return true;

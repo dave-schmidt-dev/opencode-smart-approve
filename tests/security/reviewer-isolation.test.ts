@@ -7,6 +7,20 @@ describe("reviewer isolation", () => {
     expect(redactCommand("git status --short")).toBe("git status --short");
     expect(redactCommand("git checkout private-feature-name")).toBe("git <arg> <arg>");
   });
+  test("keeps redaction idempotent across multi-shape and sentinel-spoof inputs", () => {
+    for (const command of [
+      "echo value | less README.md",
+      "env FOO=bar git status --short",
+      "printf '%s' \"quoted value\" > output.txt",
+      "git show HEAD:path/to/file && cat ./README.md",
+      `echo ${String.fromCharCode(1)}0${String.fromCharCode(1)}`,
+      "<arg> date",
+    ]) {
+      const once = redactCommand(command);
+      expect(redactCommand(once)).toBe(once);
+    }
+    expect(redactCommand("<arg> date")).toBe("<arg> <arg>");
+  });
   test("uses a deny-all child and sends only bounded redacted facts", async () => {
     let createInput: any;
     let promptInput: any;
@@ -52,7 +66,7 @@ describe("reviewer isolation", () => {
     expect(Object.values(promptInput.body.tools).every((value) => value === false)).toBe(true);
     const payload = JSON.parse(promptInput.body.parts[0].text.split("\n").at(-1));
     expect(promptInput.body.parts[0].text).toContain('For allow, return exactly {"decision":"allow","reasonCodes":["safe"]}.');
-    expect(promptInput.body.parts[0].text).toContain("Allow only a clearly non-mutating, non-network command shape.");
+    expect(promptInput.body.parts[0].text).toContain("Everything reaching you already passed upstream checks for mutation");
     expect(payload).toEqual({
       redactedCommand: "echo <arg>><arg>",
       parserFeatures: { pipeline: false, segmentCount: 1, unsupported: ["none"] },

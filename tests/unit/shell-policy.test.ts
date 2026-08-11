@@ -115,6 +115,14 @@ describe("deterministic policy", () => {
     }
   });
 
+  test("keeps less on the deterministic manual path because it permits execution escapes", async () => {
+    for (const command of ["less README.md", "cat README.md | less", "command less README.md", "env less README.md"]) {
+      const result = await evaluateDeterministicPolicy(command);
+      expect(result.status).toBe("manual");
+      if (command.startsWith("less") || command.includes("| less")) expect(result.reasonCodes).toContain("dangerous_command");
+    }
+  });
+
   test("user model-review rules cannot widen parser or privacy hard blocks", async () => {
     expect((await evaluateDeterministicPolicy("echo (", {
       config: { policy: { rules: [{ pattern: "echo", action: "model_review" }] } },
