@@ -42,6 +42,16 @@ loader entry to restore stock OpenCode; no session-data edit is required. OpenCo
 1.18.10 is the tested compatibility target, not a model qualification. DeepSeek V4
 Flash remains a candidate reviewer until every qualification threshold passes.
 
+## Development verification
+
+The disposable OpenCode checks use the pinned local `opencode-ai@1.18.10` binary
+by default. They isolate config, data, state, and cache under a temporary root and
+fail closed when an explicit `OPENCODE_BIN` reports any other version. Run the
+offline checks with `bun run check`; run the attended exact-runtime checks with
+`bun run test:e2e`. The separate attended `bun run qualify:live` command produces
+qualification evidence but cannot enable approval unless every locked gate passes.
+These checks do not install the plugin globally or enable model-backed approval.
+
 ## Verified OpenCode boundary
 
 OpenCode 1.18.10 publishes `permission.asked` events and accepts

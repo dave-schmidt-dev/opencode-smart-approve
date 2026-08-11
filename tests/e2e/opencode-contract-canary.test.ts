@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, mock, test } from "bun:test";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { createApprovalAdapter } from "../../src/opencode/client";
 import { DEFAULT_CONFIG } from "../../src/config/schema";
 import { configuredShellCompatible, createSmartApproveHooks, isBashCompatibleInterpreter } from "../../src/plugin";
@@ -12,6 +13,7 @@ import {
   REVIEWER_VARIANT,
   ZERO_TOOL_COUNTERS,
 } from "../../src/reviewer/agent";
+import { DEFAULT_OPENCODE_BINARY, requireOpenCodeVersion } from "../../scripts/e2e-opencode";
 
 const asked = (id: string, command: string, sessionID = "parent-session") => ({
   type: "permission.asked",
@@ -36,11 +38,14 @@ const withDeadline = async <T>(promise: Promise<T>, timeoutMs: number, message: 
   }
 };
 
-const waitForServer = async (baseURL: string, timeoutMs = 10_000): Promise<void> => {
+const waitForServer = async (baseURL: string, timeoutMs = 10_000, exited: () => boolean = () => false): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (exited()) throw new Error("OpenCode server exited before becoming ready");
     try {
-      const response = await fetch(`${baseURL}/session`);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      const response = await fetch(`${baseURL}/session`, { signal: AbortSignal.timeout(Math.min(1_000, remainingMs)) });
       if (response.ok) return;
     } catch { /* the disposable server is still starting */ }
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -58,9 +63,23 @@ interface RuntimePermissionAsked {
   };
 }
 
-const readRuntimePermissionAsked = async (baseURL: string, signal: AbortSignal): Promise<RuntimePermissionAsked> => {
+interface RuntimePermissionReplied {
+  readonly type: "permission.replied";
+  readonly properties: {
+    readonly sessionID: string;
+    readonly requestID: string;
+    readonly reply: string;
+  };
+}
+
+const readRuntimePermissionAsked = async (
+  baseURL: string,
+  signal: AbortSignal,
+  onReady?: () => void,
+): Promise<RuntimePermissionAsked> => {
   const response = await fetch(`${baseURL}/global/event`, { signal });
   if (!response.ok || !response.body) throw new Error(`event stream failed: ${response.status}`);
+  onReady?.();
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -88,6 +107,61 @@ const readRuntimePermissionAsked = async (baseURL: string, signal: AbortSignal):
   }
 };
 
+const readRuntimePermissionReplies = async (
+  baseURL: string,
+  requestIDs: readonly string[],
+  signal: AbortSignal,
+  onReady?: () => void,
+): Promise<RuntimePermissionReplied[]> => {
+  const response = await fetch(`${baseURL}/global/event`, { signal });
+  if (!response.ok || !response.body) throw new Error(`event stream failed: ${response.status}`);
+  onReady?.();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const expected = new Set(requestIDs);
+  const observed = new Map<string, RuntimePermissionReplied>();
+  let buffer = "";
+  try {
+    while (observed.size < expected.size) {
+      const { done, value } = await withDeadline(reader.read(), 10_000, "permission.replied event deadline exceeded");
+      if (done) throw new Error("event stream ended before permission.replied");
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+        if (data && data !== "[DONE]") {
+          const envelope = JSON.parse(data) as { payload?: unknown };
+          const event = (envelope.payload ?? envelope) as Partial<RuntimePermissionReplied>;
+          if (event.type === "permission.replied" && event.properties && expected.has(event.properties.requestID)) {
+            observed.set(event.properties.requestID, event as RuntimePermissionReplied);
+          }
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+    return requestIDs.map((requestID) => observed.get(requestID)!).filter(Boolean);
+  } finally {
+    await withDeadline(reader.cancel().catch(() => undefined), 1_000, "event reader cancellation deadline exceeded").catch(() => undefined);
+    reader.releaseLock();
+  }
+};
+
+const beginRuntimeEventSubscription = <T>(
+  start: (onReady: () => void) => Promise<T>,
+): { readonly event: Promise<T>; readonly ready: Promise<void> } => {
+  let markReady: () => void = () => undefined;
+  const streamReady = new Promise<void>((resolve) => { markReady = resolve; });
+  const event = start(markReady);
+  const ready = withDeadline(
+    Promise.race([streamReady, event.then(() => undefined)]),
+    5_000,
+    "event stream did not become ready",
+  );
+  return { event, ready };
+};
+
 const reservePort = async (): Promise<number> => {
   const reservation = Bun.serve({ port: 0, fetch: () => new Response("reserved") });
   const port = reservation.port;
@@ -96,12 +170,204 @@ const reservePort = async (): Promise<number> => {
   return port;
 };
 
-const opencodeBinary = process.env.OPENCODE_BIN ?? "opencode";
+const opencodeBinary = process.env.OPENCODE_BIN ?? DEFAULT_OPENCODE_BINARY;
+const SHORT_CANARY_TIMEOUT_MS = 90_000;
 
-const localCompletion = (title: boolean): Response => {
+type PendingPermission = {
+  readonly id: string;
+  readonly sessionID: string;
+};
+
+type TerminalResult = "fulfilled" | "rejected" | "http_error" | "unsettled";
+type Propagation = "assistant_continues" | "turn_fails" | "session_aborts";
+
+const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+const debugCanaryStatus = (status: string): void => {
+  if (process.env.STALL_CANARY_DEBUG === "1") process.stderr.write(`[bounded-stall-canary] ${status}\n`);
+};
+
+const waitWithStderrProgress = async (milliseconds: number, completedMinutes: number): Promise<void> => {
+  process.stderr.write(`[bounded-stall-canary] pending-list wait starting (${milliseconds}ms)\n`);
+  let elapsed = 0;
+  while (elapsed < milliseconds) {
+    const interval = Math.min(60_000, milliseconds - elapsed);
+    await sleep(interval);
+    elapsed += interval;
+    process.stderr.write(`[bounded-stall-canary] pending-list ${completedMinutes + Math.ceil(elapsed / 60_000)}m (${elapsed}ms elapsed)\n`);
+  }
+};
+
+const sanitizedBody = async (response: Response): Promise<"true" | "false" | "empty" | "other"> => {
+  const body = (await response.clone().text()).trim();
+  if (!body) return "empty";
+  if (body === "true") return "true";
+  if (body === "false") return "false";
+  return "other";
+};
+
+const listPendingPermissions = async (baseURL: string): Promise<PendingPermission[]> => {
+  const response = await fetch(`${baseURL}/permission`, { signal: AbortSignal.timeout(5_000) });
+  if (!response.ok) throw new Error(`pending-permission query failed: ${response.status}`);
+  const value = await response.json() as unknown;
+  if (!Array.isArray(value)) throw new Error("pending-permission query did not return an array");
+  return value.map((entry) => {
+    const permission = entry as Partial<PendingPermission>;
+    if (typeof permission.id !== "string" || typeof permission.sessionID !== "string") {
+      throw new Error("pending-permission query returned an incomplete request");
+    }
+    return { id: permission.id, sessionID: permission.sessionID };
+  });
+};
+
+const waitForPendingPermission = async (baseURL: string, sessionID: string, timeoutMs = 10_000): Promise<PendingPermission> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const matching = (await listPendingPermissions(baseURL)).find((permission) => permission.sessionID === sessionID);
+    if (matching) return matching;
+    await sleep(25);
+  }
+  throw new Error("pending permission was not independently observable");
+};
+
+const settleTerminal = async (promise: Promise<Response>, timeoutMs = 10_000): Promise<TerminalResult> => {
+  try {
+    const response = await withDeadline(promise, timeoutMs, "message did not terminalize after reject");
+    return response.ok ? "fulfilled" : "http_error";
+  } catch (error) {
+    return error instanceof Error && error.message === "message did not terminalize after reject" ? "unsettled" : "rejected";
+  }
+};
+
+const writeRuntimeEvidence = async (observations: Record<string, unknown>): Promise<void> => {
+  const evidencePath = join(process.cwd(), "eval-results/2026-08-10-bounded-stall-runtime-contract.jsonl");
+  const bounded = Object.fromEntries(Object.entries(observations).slice(0, 64));
+  const record = JSON.stringify({
+    runtime: "local disposable OpenCode 1.18.10",
+    capture: "bounded status, shape, count, and enum observations; no command, provider, or error bytes",
+    observations: bounded,
+  });
+  if (record.length > 16_384) throw new Error("runtime evidence record exceeded bounded size");
+  await mkdir(join(process.cwd(), "eval-results"), { recursive: true });
+  await appendFile(evidencePath, `${record}\n`, { encoding: "utf8", flag: "a" });
+};
+
+interface RuntimeCanary {
+  readonly baseURL: string;
+  readonly provider: ReturnType<typeof Bun.serve>;
+  readonly nonTitleProviderCalls: () => number;
+  readonly createSession: (parentID?: string) => Promise<{ id: string; parentID?: string }>;
+  readonly prompt: (sessionID: string, signal?: AbortSignal, text?: string) => Promise<Response>;
+  readonly promptAsync: (sessionID: string, text?: string) => Promise<Response>;
+  readonly cleanup: () => Promise<void>;
+}
+
+const startRuntimeCanary = async (): Promise<RuntimeCanary> => {
+  const root = await mkdtemp(join(tmpdir(), "smart-approve-runtime-"));
+  const configHome = join(root, "config");
+  const dataHome = join(root, "data");
+  const stateHome = join(root, "state");
+  const cacheHome = join(root, "cache");
+  const configDir = join(configHome, "opencode");
+  let nonTitleProviderCalls = 0;
+  const provider = Bun.serve({
+    port: 0,
+    fetch: async (request) => {
+      const requestBody = await request.text();
+      const title = requestBody.includes("title generator");
+      if (!title) nonTitleProviderCalls += 1;
+      return localCompletion(title, requestBody.includes("parallel-permission"));
+    },
+  });
+  let baseURL = "";
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  const stopChild = async (): Promise<void> => {
+    const current = child;
+    child = undefined;
+    if (!current) return;
+    if (current.exitCode === null) current.kill();
+    const exited = await Promise.race([current.exited.then(() => true), sleep(2_000).then(() => false)]);
+    if (!exited) {
+      current.kill("SIGKILL");
+      await Promise.race([current.exited, sleep(2_000)]);
+    }
+  };
+  const cleanup = async (): Promise<void> => {
+    await stopChild();
+    await withDeadline(provider.stop(true), 2_000, "provider shutdown deadline exceeded");
+    await withDeadline(rm(root, { recursive: true, force: true }), 5_000, "sandbox cleanup deadline exceeded");
+  };
+  try {
+    await mkdir(configDir, { recursive: true });
+    await mkdir(dataHome, { recursive: true });
+    await mkdir(stateHome, { recursive: true });
+    await mkdir(cacheHome, { recursive: true });
+    const config = {
+      "$schema": "https://opencode.ai/config.json",
+      model: "local/test",
+      permission: { bash: "ask" },
+      provider: { local: { npm: "@ai-sdk/openai-compatible", name: "Local", options: { baseURL: `http://127.0.0.1:${provider.port}/v1`, apiKey: "test" }, models: { test: { name: "test", tool_call: true, limit: { context: 32_768, output: 4_096 } } } } },
+    };
+    await writeFile(join(configDir, "opencode.jsonc"), JSON.stringify(config));
+    requireOpenCodeVersion({ configHome, dataHome, stateHome, cacheHome });
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const port = await reservePort();
+      baseURL = `http://127.0.0.1:${port}`;
+      child = Bun.spawn([opencodeBinary, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
+        env: { ...globalThis.process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_STATE_HOME: stateHome, XDG_CACHE_HOME: cacheHome },
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      try {
+        await waitForServer(baseURL, 5_000, () => child?.exitCode !== null);
+        break;
+      } catch (error) {
+        await stopChild();
+        if (attempt === 3) throw error;
+        process.stderr.write(`[bounded-stall-canary] runtime start retry ${attempt + 1}/3\n`);
+      }
+    }
+    if (!child) throw new Error("OpenCode server did not start");
+    return {
+      baseURL,
+      provider,
+      nonTitleProviderCalls: () => nonTitleProviderCalls,
+      createSession: async (parentID?: string) => {
+        const response = await fetch(`${baseURL}/session`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: "smart-approve runtime canary", ...(parentID ? { parentID } : {}) }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) throw new Error(`session creation failed: ${response.status}`);
+        return await response.json() as { id: string; parentID?: string };
+      },
+      prompt: (sessionID, signal, text = "run disposable canary") => fetch(`${baseURL}/session/${sessionID}/message`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: { providerID: "local", modelID: "test" }, agent: "build", parts: [{ type: "text", text }] }),
+        signal,
+      }),
+      promptAsync: (sessionID, text = "run disposable canary") => fetch(`${baseURL}/session/${sessionID}/prompt_async`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: { providerID: "local", modelID: "test" }, agent: "build", parts: [{ type: "text", text }] }),
+        signal: AbortSignal.timeout(5_000),
+      }),
+      cleanup,
+    };
+  } catch (error) {
+    await cleanup().catch(() => undefined);
+    throw error;
+  }
+};
+
+const localCompletion = (title: boolean, twoToolCalls = false): Response => {
   const chunks = title
     ? [{ delta: { role: "assistant", content: "Canary" }, finish_reason: null }, { delta: {}, finish_reason: "stop" }]
-    : [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "canary-call", type: "function", function: { name: "bash", arguments: "" } }] }, finish_reason: null }, { delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command: "printf canary" }) } }] }, finish_reason: null }, { delta: {}, finish_reason: "tool_calls" }];
+    : twoToolCalls
+      ? [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "canary-call-one", type: "function", function: { name: "bash", arguments: "" } }, { index: 1, id: "canary-call-two", type: "function", function: { name: "bash", arguments: "" } }] }, finish_reason: null }, { delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command: "printf one" }) } }, { index: 1, function: { arguments: JSON.stringify({ command: "printf two" }) } }] }, finish_reason: null }, { delta: {}, finish_reason: "tool_calls" }]
+      : [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "canary-call", type: "function", function: { name: "bash", arguments: "" } }] }, finish_reason: null }, { delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command: "printf canary" }) } }] }, finish_reason: null }, { delta: {}, finish_reason: "tool_calls" }];
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       for (const [index, chunk] of chunks.entries()) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ id: "canary", object: "chat.completion.chunk", choices: [{ index: 0, ...chunk }] })}\n\n`));
@@ -118,6 +384,7 @@ describe("OpenCode 1.18.10 contract canary", () => {
     const configHome = join(root, "config");
     const dataHome = join(root, "data");
     const stateHome = join(root, "state");
+    const cacheHome = join(root, "cache");
     const configDir = join(configHome, "opencode");
     const provider = Bun.serve({
       port: 0,
@@ -132,6 +399,7 @@ describe("OpenCode 1.18.10 contract canary", () => {
       await mkdir(configDir, { recursive: true });
       await mkdir(dataHome, { recursive: true });
       await mkdir(stateHome, { recursive: true });
+      await mkdir(cacheHome, { recursive: true });
       const config = {
         "$schema": "https://opencode.ai/config.json",
         model: "local/test",
@@ -139,7 +407,8 @@ describe("OpenCode 1.18.10 contract canary", () => {
         provider: { local: { npm: "@ai-sdk/openai-compatible", name: "Local", options: { baseURL: `http://127.0.0.1:${provider.port}/v1`, apiKey: "test" }, models: { test: { name: "test", tool_call: true, limit: { context: 32_768, output: 4_096 } } } } },
       };
       await writeFile(join(configDir, "opencode.jsonc"), JSON.stringify(config));
-      child = Bun.spawn([opencodeBinary, "serve", "--port", String(port), "--hostname", "127.0.0.1"], { env: { ...globalThis.process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_STATE_HOME: stateHome }, stdout: "ignore", stderr: "ignore" });
+      requireOpenCodeVersion({ configHome, dataHome, stateHome, cacheHome }, { ...globalThis.process.env, OPENCODE_BIN: opencodeBinary });
+      child = Bun.spawn([opencodeBinary, "serve", "--port", String(port), "--hostname", "127.0.0.1"], { env: { ...globalThis.process.env, OPENCODE_BIN: opencodeBinary, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_STATE_HOME: stateHome, XDG_CACHE_HOME: cacheHome }, stdout: "ignore", stderr: "ignore" });
       await waitForServer(baseURL);
       const eventPromise = readRuntimePermissionAsked(baseURL, AbortSignal.any([eventAbort.signal, AbortSignal.timeout(15_000)]));
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -158,9 +427,9 @@ describe("OpenCode 1.18.10 contract canary", () => {
       expect(event.properties.id).toBeTruthy();
       expect(event.properties.sessionID).toBe(session.id);
 
-      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      await waitWithStderrProgress(10_000, 0);
       expect(pendingSettled).toBe(false);
-      await new Promise((resolve) => setTimeout(resolve, 50_000));
+      await waitWithStderrProgress(50_000, 0);
       expect(pendingSettled).toBe(false);
 
       await fetch(`${baseURL}/session/${session.id}/abort`, { method: "POST", signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
@@ -181,6 +450,294 @@ describe("OpenCode 1.18.10 contract canary", () => {
       await withDeadline(rm(root, { recursive: true, force: true }), 5_000, "sandbox cleanup deadline exceeded");
     }
   }, { timeout: 120_000 });
+
+  test.serial("reject contract short captures exact reject HTTP/SDK shape and propagation", async () => {
+    debugCanaryStatus("short propagation: starting runtime");
+    const canary = await startRuntimeCanary();
+    const parentAbort = new AbortController();
+    try {
+      debugCanaryStatus("short propagation: creating session");
+      const parent = await canary.createSession();
+      const parentSubscription = beginRuntimeEventSubscription((onReady) =>
+        readRuntimePermissionAsked(canary.baseURL, AbortSignal.timeout(15_000), onReady));
+      await parentSubscription.ready;
+      const parentMessage = canary.prompt(parent.id, parentAbort.signal);
+      void parentMessage.catch(() => undefined);
+      debugCanaryStatus("short propagation: awaiting permission event");
+      const askedParent = await parentSubscription.event;
+      expect(askedParent.properties.sessionID).toBe(parent.id);
+      expect(askedParent.properties.permission).toBe("bash");
+      const parentPending = await waitForPendingPermission(canary.baseURL, parent.id);
+      debugCanaryStatus("short propagation: permission independently listed");
+      expect(parentPending.id).toBe(askedParent.properties.id);
+
+      let capturedStatus: number | undefined;
+      let capturedBody: "true" | "false" | "empty" | "other" | undefined;
+      let capturedPath: string | undefined;
+      const capturingFetch = Object.assign(async (request: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        capturedPath = new URL(typeof request === "string" ? request : request instanceof URL ? request.toString() : request.url).pathname;
+        try {
+          const response = await fetch(request, init);
+          capturedStatus = response.status;
+          capturedBody = await sanitizedBody(response);
+          return response;
+        } catch {
+          throw new Error(`SDK permission reply was interrupted at ${capturedPath}`);
+        }
+      }, { preconnect: fetch.preconnect.bind(fetch) });
+      const client = createOpencodeClient({
+        baseUrl: canary.baseURL,
+        fetch: capturingFetch,
+      });
+      const providerCallsBeforeReject = canary.nonTitleProviderCalls();
+      expect(providerCallsBeforeReject).toBe(1);
+      const sdkResult = await client.permission.reply({ requestID: parentPending.id, reply: "reject" }, { throwOnError: false });
+      debugCanaryStatus("short propagation: reject returned");
+      const sdkResultKeys = Object.keys(sdkResult).sort();
+      expect(capturedStatus).toBe(200);
+      expect(capturedBody).toBe("true");
+      expect(sdkResult.response.status).toBe(200);
+      expect(sdkResult.data).toBe(true);
+      expect(sdkResult.error).toBeUndefined();
+      expect(sdkResultKeys).toEqual(["data", "request", "response"]);
+
+      const parentTerminal = await settleTerminal(parentMessage);
+      debugCanaryStatus(`short propagation: message ${parentTerminal}`);
+      expect(parentTerminal).not.toBe("unsettled");
+      const sessionState = await fetch(`${canary.baseURL}/session/${parent.id}`, { signal: AbortSignal.timeout(5_000) });
+      await sleep(250);
+      const providerCallsAfterReject = canary.nonTitleProviderCalls();
+      const sameTurnContinuation = providerCallsAfterReject > providerCallsBeforeReject;
+      const propagation: Propagation = !sessionState.ok
+        ? "session_aborts"
+        : sameTurnContinuation
+          ? "assistant_continues"
+          : "turn_fails";
+      // The pinned 1.18.10 runtime rejects the tool call and ends this turn;
+      // continuation is only enabled by the explicit message-bearing path.
+      expect(sessionState.ok).toBe(true);
+      expect(sameTurnContinuation).toBe(false);
+      expect(propagation).toBe("turn_fails");
+
+      await writeRuntimeEvidence({
+        exact_binary: "1.18.10",
+        reject_http: { status: capturedStatus, body: capturedBody },
+        sdk_nonthrowing_result: { keys: sdkResultKeys, data: "boolean:true", error_property: "absent", response_status: sdkResult.response.status },
+        propagation,
+        propagation_probe: { parent_terminal: parentTerminal, same_turn_provider_calls_before_reject: providerCallsBeforeReject, same_turn_provider_calls_after_reject: providerCallsAfterReject },
+      });
+      debugCanaryStatus("short propagation: evidence written");
+    } finally {
+      parentAbort.abort();
+      debugCanaryStatus("short propagation: cleanup starting");
+      await canary.cleanup();
+      debugCanaryStatus("short propagation: cleanup complete");
+    }
+  }, { timeout: SHORT_CANARY_TIMEOUT_MS });
+
+  test.serial("reject contract short probes same-session two-tool-call and concurrent-prompt reachability", async () => {
+    const canary = await startRuntimeCanary();
+    const multiToolAbort = new AbortController();
+    const multiToolRepliesAbort = new AbortController();
+    const cascadeAbort = new AbortController();
+    const secondAbort = new AbortController();
+    try {
+      const multiToolSession = await canary.createSession();
+      const multiToolSubscription = beginRuntimeEventSubscription((onReady) =>
+        readRuntimePermissionAsked(canary.baseURL, AbortSignal.timeout(15_000), onReady));
+      await multiToolSubscription.ready;
+      const multiToolMessage = canary.prompt(multiToolSession.id, multiToolAbort.signal, "parallel-permission");
+      void multiToolMessage.catch(() => undefined);
+      await multiToolSubscription.event;
+      await sleep(250);
+      const multiToolPending = (await listPendingPermissions(canary.baseURL)).filter((permission) => permission.sessionID === multiToolSession.id);
+      expect(multiToolPending.length).toBeGreaterThanOrEqual(2);
+      const multiToolRequestIDs = multiToolPending.slice(0, 2).map((permission) => permission.id);
+      const multiToolRepliedSubscription = beginRuntimeEventSubscription((onReady) =>
+        readRuntimePermissionReplies(
+          canary.baseURL,
+          multiToolRequestIDs,
+          AbortSignal.any([multiToolRepliesAbort.signal, AbortSignal.timeout(10_000)]),
+          onReady,
+        ));
+      await multiToolRepliedSubscription.ready;
+      const multiToolReject = await fetch(`${canary.baseURL}/permission/${multiToolPending[0]?.id}/reply`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reply: "reject" }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      expect(multiToolReject.status).toBe(200);
+      expect(await sanitizedBody(multiToolReject)).toBe("true");
+      const multiToolReplies = await multiToolRepliedSubscription.event;
+      expect(multiToolReplies.map((event) => event.properties.requestID).sort()).toEqual([...multiToolRequestIDs].sort());
+      expect(multiToolReplies.map((event) => event.properties.reply)).toEqual(["reject", "reject"]);
+      const afterMultiToolReject = await listPendingPermissions(canary.baseURL);
+      expect(afterMultiToolReject.some((permission) => multiToolRequestIDs.includes(permission.id))).toBe(false);
+      const multiToolTerminal = await settleTerminal(multiToolMessage);
+
+      const cascadeParent = await canary.createSession();
+      const cascadeFirstSubscription = beginRuntimeEventSubscription((onReady) =>
+        readRuntimePermissionAsked(canary.baseURL, AbortSignal.timeout(15_000), onReady));
+      await cascadeFirstSubscription.ready;
+      const cascadeFirstMessage = canary.prompt(cascadeParent.id, cascadeAbort.signal);
+      void cascadeFirstMessage.catch(() => undefined);
+      await cascadeFirstSubscription.event;
+      const cascadeFirstPending = await waitForPendingPermission(canary.baseURL, cascadeParent.id);
+      const secondEventAbort = new AbortController();
+      const secondSubscription = beginRuntimeEventSubscription((onReady) =>
+        readRuntimePermissionAsked(canary.baseURL, secondEventAbort.signal, onReady));
+      await secondSubscription.ready;
+      const secondMessage = canary.prompt(cascadeParent.id, secondAbort.signal);
+      void secondMessage.catch(() => undefined);
+      const askedSecond = await Promise.race([secondSubscription.event.catch(() => undefined), sleep(3_000).then(() => undefined)]);
+      secondEventAbort.abort();
+      const pendingBeforeReject = await listPendingPermissions(canary.baseURL);
+      const sameSession = pendingBeforeReject.filter((permission) => permission.sessionID === cascadeParent.id);
+      const secondReachable = askedSecond !== undefined && sameSession.length >= 2;
+      let cascadeFirstTerminal: TerminalResult = "unsettled";
+      let secondTerminal: TerminalResult = "unsettled";
+      let cascadeFirstReply: "reject" | "not_observed" = "not_observed";
+      let secondReply: "inferred_reject_cascade" | "not_observed" = "not_observed";
+      if (secondReachable) {
+        const cascadeReject = await fetch(`${canary.baseURL}/permission/${cascadeFirstPending.id}/reply`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reply: "reject" }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        expect(cascadeReject.status).toBe(200);
+        expect(await sanitizedBody(cascadeReject)).toBe("true");
+        cascadeFirstReply = "reject";
+        secondReply = "inferred_reject_cascade";
+        cascadeFirstTerminal = await settleTerminal(cascadeFirstMessage);
+        secondTerminal = await settleTerminal(secondMessage);
+      } else {
+        secondAbort.abort();
+        secondTerminal = await settleTerminal(secondMessage, 1_000);
+        const firstReject = await fetch(`${canary.baseURL}/permission/${cascadeFirstPending.id}/reply`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reply: "reject" }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        expect(firstReject.status).toBe(200);
+        expect(await sanitizedBody(firstReject)).toBe("true");
+        cascadeFirstReply = "reject";
+        cascadeFirstTerminal = await settleTerminal(cascadeFirstMessage);
+      }
+
+      await writeRuntimeEvidence({
+        exact_binary: "1.18.10",
+        same_session_pending: {
+          reachable: true,
+          attempts: {
+            two_tool_calls: {
+              mechanism: "one assistant response with two Bash tool calls",
+              reachable: true,
+              requests: [
+                { id: multiToolReplies[0]?.properties.requestID, observed_reply: multiToolReplies[0]?.properties.reply, terminal: "removed_from_pending_list" },
+                { id: multiToolReplies[1]?.properties.requestID, observed_reply: multiToolReplies[1]?.properties.reply, terminal: "removed_from_pending_list" },
+              ],
+              message_terminal: multiToolTerminal,
+            },
+            concurrent_prompts: {
+              mechanism: "two concurrent user prompts",
+              reachable: secondReachable,
+              requests: [
+                { id: cascadeFirstPending.id, observed_reply: cascadeFirstReply, terminal: cascadeFirstTerminal },
+                { id: askedSecond?.properties.id, inferred_reply: secondReply, terminal: secondTerminal },
+              ],
+            },
+          },
+        },
+      });
+    } finally {
+      multiToolAbort.abort();
+      multiToolRepliesAbort.abort();
+      cascadeAbort.abort();
+      secondAbort.abort();
+      await canary.cleanup();
+    }
+  }, { timeout: SHORT_CANARY_TIMEOUT_MS });
+
+  test.serial("reject contract short verifies reviewer-child isolation", async () => {
+    const canary = await startRuntimeCanary();
+    const parentAbort = new AbortController();
+    const childAbort = new AbortController();
+    try {
+      const isolationParent = await canary.createSession();
+      const isolationParentSubscription = beginRuntimeEventSubscription((onReady) =>
+        readRuntimePermissionAsked(canary.baseURL, AbortSignal.timeout(15_000), onReady));
+      await isolationParentSubscription.ready;
+      const isolationParentMessage = canary.prompt(isolationParent.id, parentAbort.signal);
+      void isolationParentMessage.catch(() => undefined);
+      await isolationParentSubscription.event;
+      const isolationParentPending = await waitForPendingPermission(canary.baseURL, isolationParent.id);
+      const reviewerChild = await canary.createSession(isolationParent.id);
+      expect(reviewerChild.parentID).toBe(isolationParent.id);
+      const childSubscription = beginRuntimeEventSubscription((onReady) =>
+        readRuntimePermissionAsked(canary.baseURL, AbortSignal.timeout(15_000), onReady));
+      await childSubscription.ready;
+      const childMessage = canary.prompt(reviewerChild.id, childAbort.signal);
+      const askedChild = await childSubscription.event;
+      expect(askedChild.properties.sessionID).toBe(reviewerChild.id);
+      const childPending = await waitForPendingPermission(canary.baseURL, reviewerChild.id);
+      const childReject = await fetch(`${canary.baseURL}/permission/${childPending.id}/reply`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reply: "reject" }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      expect(childReject.status).toBe(200);
+      expect(await sanitizedBody(childReject)).toBe("true");
+      expect(await settleTerminal(childMessage)).not.toBe("unsettled");
+      const afterChildReject = await listPendingPermissions(canary.baseURL);
+      expect(afterChildReject.some((permission) => permission.id === isolationParentPending.id)).toBe(true);
+
+      await writeRuntimeEvidence({
+        exact_binary: "1.18.10",
+        reviewer_child_isolation: { child_reject_status: childReject.status, parent_remained_pending: true },
+      });
+
+      await fetch(`${canary.baseURL}/session/${isolationParent.id}/abort`, { method: "POST", signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
+      await Promise.race([isolationParentMessage.catch(() => undefined), sleep(2_000)]);
+    } finally {
+      parentAbort.abort();
+      childAbort.abort();
+      await canary.cleanup();
+    }
+  }, { timeout: SHORT_CANARY_TIMEOUT_MS });
+
+  test.if(process.env.RUN_LONG_STALL_CANARY === "1")("contract independently lists a held permission at 5 and 60 minutes", async () => {
+    const canary = await startRuntimeCanary();
+    try {
+      const session = await canary.createSession();
+      const subscription = beginRuntimeEventSubscription((onReady) =>
+        readRuntimePermissionAsked(canary.baseURL, AbortSignal.timeout(15_000), onReady));
+      await subscription.ready;
+      const promptAccepted = await canary.promptAsync(session.id);
+      expect(promptAccepted.status).toBe(204);
+      await subscription.event;
+      const permission = await waitForPendingPermission(canary.baseURL, session.id);
+      process.stderr.write("[bounded-stall-canary] pending-list observation started\n");
+      await waitWithStderrProgress(300_000, 0);
+      const atFiveMinutes = await listPendingPermissions(canary.baseURL);
+      expect(atFiveMinutes.some((entry) => entry.id === permission.id)).toBe(true);
+      process.stderr.write("[bounded-stall-canary] pending-list 5-minute observation passed\n");
+      await waitWithStderrProgress(3_300_000, 5);
+      const atSixtyMinutes = await listPendingPermissions(canary.baseURL);
+      expect(atSixtyMinutes.some((entry) => entry.id === permission.id)).toBe(true);
+      process.stderr.write("[bounded-stall-canary] pending-list 60-minute observation passed\n");
+      await writeRuntimeEvidence({
+        exact_binary: "1.18.10",
+        pending_list_lifetime: { at_5_minutes: "pending", at_60_minutes: "pending", oracle: "independent GET /permission" },
+      });
+      await fetch(`${canary.baseURL}/session/${session.id}/abort`, { method: "POST", signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
+    } finally {
+      await canary.cleanup();
+    }
+  }, { timeout: 3_900_000 });
 
   test("contract keeps the unqualified reviewer disabled even when configuration requests it", async () => {
     const statuses: string[] = [];
