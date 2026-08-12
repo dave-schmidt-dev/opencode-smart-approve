@@ -35,6 +35,7 @@ describe("isolated reviewer decisions", () => {
       const result = await createReviewerAgent({ client: client(allowMessage, calls) }).review({ requestID, prompt });
 
       expect(result.decision).toBe("allow");
+      expect(result.outcome?.kind).toBe("valid_model");
       expect(result.requestID).toBe(requestID);
       expect(calls.filter((call) => call.method === "create")).toHaveLength(1);
       expect(calls.filter((call) => call.method === "prompt")).toHaveLength(1);
@@ -100,6 +101,7 @@ describe("isolated reviewer decisions", () => {
 
     expect(result.decision).toBe("manual");
     expect(result.reasonCodes).toEqual(["timeout"]);
+    expect(result.outcome?.kind).toBe("timeout");
     expect(calls.filter((call) => call.method === "abort").map((call) => call.input)).toEqual([
       { path: { id: "exact-timeout-child" }, query: { directory: "/project" } },
     ]);

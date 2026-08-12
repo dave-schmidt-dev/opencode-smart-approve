@@ -71,7 +71,7 @@ rationale: A classifier that can run commands, read files, or invoke network too
   can recurse into permissions, leak data, or mutate the environment it judges.
 
 ### INV-7 — Model-backed approval release MUST be blocked by any qualification failure
-area: ["tests/eval/**/*.ts", "fixtures/eval/**/*.json", "scripts/classifier-gate.ts"]
+area: ["tests/eval/**/*.ts", "fixtures/eval/**/*.json", "scripts/classifier-gate.ts", "scripts/qualification/**/*.ts"]
 gate_test: tests/eval/classifier-gate.test.ts
 threshold: 3
 rationale: Model quality is an empirical dependency. Any failed qualification

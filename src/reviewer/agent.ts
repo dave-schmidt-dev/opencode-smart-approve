@@ -1,4 +1,10 @@
-import { buildReviewerPrompt, type ReviewerPathClass } from "./prompt";
+import {
+  buildReviewerContract,
+  createOpaqueCoordinatorID,
+  REVIEWER_OUTPUT_FORMAT as CONTRACT_OUTPUT_FORMAT,
+  type ReviewerOutcome,
+  type ReviewerPathClass,
+} from "./contract";
 import {
   manualReviewerResponse,
   parseReviewerResponse,
@@ -8,31 +14,14 @@ import {
 } from "./schema";
 import {
   rejectReviewerPermission,
-  REVIEWER_TOOL_DENY,
   type ReviewerSessionClient,
 } from "./client";
 
 export const REVIEWER_MODEL = "opencode-go/deepseek-v4-flash" as const;
 export const REVIEWER_VARIANT = "max" as const;
 export const REVIEWER_AGENT = "smart-approve-reviewer" as const;
-export const REVIEWER_OUTPUT_FORMAT = Object.freeze({
-  type: "json_schema" as const,
-  retryCount: 0,
-  schema: Object.freeze({
-    type: "object",
-    additionalProperties: false,
-    required: ["decision", "reasonCodes"],
-    properties: {
-      decision: { enum: ["allow", "manual"] },
-      reasonCodes: {
-        type: "array",
-        minItems: 1,
-        maxItems: 4,
-        items: { enum: ["safe", "ambiguous", "dangerous", "uncertain", "manual"] },
-      },
-    },
-  }),
-});
+/** Compatibility export; the canonical payload lives in reviewer/contract.ts. */
+export const REVIEWER_OUTPUT_FORMAT = CONTRACT_OUTPUT_FORMAT;
 
 export type ReviewerDecision = "allow" | "manual";
 export type { ReviewerResponse };
@@ -55,6 +44,10 @@ export const ZERO_TOOL_COUNTERS: ToolCounters = Object.freeze({
 
 export interface ReviewerRequest {
   readonly requestID: string;
+  /** Opaque coordinator identity used in provider-facing contract metadata. */
+  readonly coordinatorID?: string;
+  /** The coordinator owns the deadline for production requests. */
+  readonly deadlineOwnedByCoordinator?: boolean;
   readonly parentSessionID?: string;
   /** Legacy callers may provide the command here; it is redacted before use. */
   readonly prompt: string;
@@ -71,8 +64,10 @@ export interface ReviewerResult {
   readonly reason?: string;
   /** Bound by the plugin, never accepted from model output. */
   readonly requestID?: string;
+  readonly coordinatorID?: string;
   readonly sessionID: string;
   readonly toolCounters: ToolCounters;
+  readonly outcome?: ReviewerOutcome;
 }
 
 export interface ReviewerAgentOptions {
@@ -87,6 +82,8 @@ export interface ReviewerAgentOptions {
 
 export interface ReviewerAgent {
   readonly review: (request: ReviewerRequest) => Promise<ReviewerResult>;
+  /** Cancel only the reviewer child owned by this exact request. */
+  readonly cancel: (requestID: string) => Promise<void>;
   readonly isPluginSession: (sessionID: string) => boolean;
   readonly handlePermission: (input: { requestID: string; sessionID?: string }) => Promise<boolean>;
   readonly dispose: () => Promise<void>;
@@ -135,6 +132,43 @@ function reasonFor(error: unknown): ReviewReasonCode {
   return "provider_error";
 }
 
+function outcomeFor(
+  coordinatorID: string,
+  sessionID: string,
+  parsed: ReviewerResponse | undefined,
+  reasonCode: ReviewReasonCode | undefined,
+  providerAttempted: boolean,
+): ReviewerOutcome {
+  if (parsed) {
+    return {
+      kind: "valid_model",
+      coordinatorID,
+      sessionID,
+      providerAttempted,
+      decision: parsed.decision,
+      reasonCodes: parsed.reasonCodes,
+      schemaValid: true,
+      metricEligible: true,
+    };
+  }
+  const reason = reasonCode && reasonCode !== "safe" ? reasonCode : "provider_error";
+  const transportKinds = new Set<ReviewReasonCode>([
+    "malformed", "empty", "truncated", "timeout", "provider_error", "tool_violation", "permission_violation",
+  ]);
+  return {
+    kind: transportKinds.has(reason)
+      ? reason as "malformed" | "empty" | "truncated" | "timeout" | "provider_error" | "tool_violation" | "permission_violation"
+      : "manual",
+    coordinatorID,
+    sessionID,
+    providerAttempted,
+    decision: "manual",
+    reasonCode: reason,
+    schemaValid: false,
+    metricEligible: false,
+  };
+}
+
 function walkRecords(value: unknown, visit: (record: RecordValue) => void): void {
   if (Array.isArray(value)) {
     for (const entry of value) walkRecords(entry, visit);
@@ -157,6 +191,20 @@ function parseModel(model: string | undefined): { providerID?: string; modelID?:
 }
 
 const validRequestID = (value: string): boolean => /^[A-Za-z0-9_.:-]{1,200}$/.test(value);
+const REVIEWER_CLEANUP_TIMEOUT_MS = 250;
+
+async function boundedCleanup(operation: () => unknown | Promise<unknown>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, REVIEWER_CLEANUP_TIMEOUT_MS); }),
+    ]);
+  } catch { /* cleanup is best effort and must never reopen the permission path */ }
+  finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgent {
   const timeoutMs = options.timeoutMs ?? 30_000;
@@ -172,34 +220,49 @@ export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgen
 
   const cleanup = async (sessionID: string, requestID: string): Promise<void> => {
     if (owned.get(sessionID)?.requestID !== requestID) return;
-    try {
-      await options.client.session.abort({ path: { id: sessionID }, query: { directory: options.directory } });
-    } finally {
-      try {
-        await options.client.session.delete({ path: { id: sessionID }, query: { directory: options.directory } });
-      } finally {
-        // Keep ownership registered until both cleanup calls finish. A
-        // permission event can arrive during teardown and must still be
-        // rejected as a child request rather than falling through to the
-        // parent/native permission path.
-        if (owned.get(sessionID)?.requestID === requestID) owned.delete(sessionID);
-      }
-    }
+    await boundedCleanup(() => options.client.session.abort({ path: { id: sessionID }, query: { directory: options.directory } }));
+    await boundedCleanup(() => options.client.session.delete({ path: { id: sessionID }, query: { directory: options.directory } }));
+    // Keep ownership registered until both bounded cleanup calls finish. A
+    // permission event can arrive during teardown and must still be rejected
+    // as a child request rather than falling through to the native path.
+    if (owned.get(sessionID)?.requestID === requestID) owned.delete(sessionID);
   };
 
   const review = async (request: ReviewerRequest): Promise<ReviewerResult> => {
+    const coordinatorID = request.coordinatorID ?? createOpaqueCoordinatorID();
     if (!validRequestID(request.requestID)) {
-      return { ...manualReviewerResponse("malformed", "invalid request identifier"), requestID: request.requestID, sessionID: "", toolCounters: ZERO_TOOL_COUNTERS };
+      const outcome = outcomeFor(coordinatorID, "", undefined, "malformed", false);
+      return { ...manualReviewerResponse("malformed", "invalid request identifier"), requestID: request.requestID, coordinatorID, sessionID: "", toolCounters: ZERO_TOOL_COUNTERS, outcome };
     }
-    if (disposed) return { ...manualReviewerResponse("provider_error", "reviewer disposed"), requestID: request.requestID, sessionID: "", toolCounters: ZERO_TOOL_COUNTERS };
+    if (disposed) {
+      const outcome = outcomeFor(coordinatorID, "", undefined, "provider_error", false);
+      return { ...manualReviewerResponse("provider_error", "reviewer disposed"), requestID: request.requestID, coordinatorID, sessionID: "", toolCounters: ZERO_TOOL_COUNTERS, outcome };
+    }
     let sessionID = "";
     let ownsSession = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let providerAttempted = false;
     try {
+      const contract = buildReviewerContract({
+        coordinatorID,
+        providerID,
+        modelID,
+        requestedVariant: variant,
+        timeoutMs,
+        directory: options.directory,
+        parentSessionID: request.parentSessionID,
+        redactedCommand: request.redactedCommand ?? request.prompt,
+        parserFeatures: request.parserFeatures,
+        policyFacts: request.policyFacts,
+        pathClasses: request.pathClasses,
+      });
       const created = await options.client.session.create({
         body: {
           ...(request.parentSessionID ? { parentID: request.parentSessionID } : {}),
-          title: `smart-approve:${request.requestID}`,
+          // Direct unit callers predate the opaque coordinator contract. The
+          // production coordinator always supplies coordinatorID, so provider
+          // sessions never receive the raw OpenCode request ID on that path.
+          title: `smart-approve:${request.coordinatorID ? coordinatorID : request.requestID}`,
         },
         query: { directory: options.directory },
       });
@@ -210,40 +273,44 @@ export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgen
       }
       owned.set(sessionID, { requestID: request.requestID, permissionViolated: false });
       ownsSession = true;
-      const response = await Promise.race([
-        Promise.resolve(options.client.session.prompt({
+      const prompt = Promise.resolve(options.client.session.prompt({
           path: { id: sessionID },
           query: { directory: options.directory },
           body: {
             agent: REVIEWER_AGENT,
-            model: { providerID, modelID },
-            format: REVIEWER_OUTPUT_FORMAT,
-            tools: REVIEWER_TOOL_DENY,
-            system: "You are a deny-all, data-only classifier. Return strict JSON and never request permissions.",
-            parts: [{ type: "text", text: buildReviewerPrompt({
-              redactedCommand: request.redactedCommand ?? request.prompt,
-              parserFeatures: request.parserFeatures,
-              policyFacts: request.policyFacts,
-              pathClasses: request.pathClasses,
-            }) }],
+            model: { providerID: contract.providerID, modelID: contract.modelID },
+            format: CONTRACT_OUTPUT_FORMAT,
+            tools: contract.tools,
+            system: contract.system,
+            parts: [{ type: "text", text: contract.prompt }],
           },
-        })),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("reviewer timeout")), timeoutMs); }),
-      ]);
+        }));
+      providerAttempted = true;
+      const response = request.deadlineOwnedByCoordinator
+        ? await prompt
+        : await Promise.race([
+          prompt,
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("reviewer timeout")), timeoutMs); }),
+        ]);
       const parsed = parseReviewerResponse(response);
       const toolCounters = toolCountersFrom(response);
       const usedTool = Object.values(toolCounters).some((count) => count > 0);
       if (usedTool) {
-        return { ...manualReviewerResponse("tool_violation", "reviewer used a disabled tool"), requestID: request.requestID, sessionID, toolCounters };
+        const outcome = outcomeFor(coordinatorID, sessionID, undefined, "tool_violation", providerAttempted);
+        return { ...manualReviewerResponse("tool_violation", "reviewer used a disabled tool"), requestID: request.requestID, coordinatorID, sessionID, toolCounters, outcome };
       }
       if (owned.get(sessionID)?.permissionViolated) {
-        return { ...manualReviewerResponse("permission_violation", "reviewer requested a forbidden permission"), requestID: request.requestID, sessionID, toolCounters };
+        const outcome = outcomeFor(coordinatorID, sessionID, undefined, "permission_violation", providerAttempted);
+        return { ...manualReviewerResponse("permission_violation", "reviewer requested a forbidden permission"), requestID: request.requestID, coordinatorID, sessionID, toolCounters, outcome };
       }
-      return { ...parsed, requestID: request.requestID, sessionID, toolCounters };
+      const outcome = outcomeFor(coordinatorID, sessionID, parsed, undefined, providerAttempted);
+      return { ...parsed, requestID: request.requestID, coordinatorID, sessionID, toolCounters, outcome };
     } catch (error) {
       // Never echo provider/error text: it may contain command or secret bytes.
-      const fallback = manualReviewerResponse(reasonFor(error));
-      return { ...fallback, requestID: request.requestID, sessionID, toolCounters: ZERO_TOOL_COUNTERS };
+      const reasonCode = reasonFor(error);
+      const fallback = manualReviewerResponse(reasonCode);
+      const outcome = outcomeFor(coordinatorID, sessionID, undefined, reasonCode, providerAttempted);
+      return { ...fallback, requestID: request.requestID, coordinatorID, sessionID, toolCounters: ZERO_TOOL_COUNTERS, outcome };
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       if (ownsSession && sessionID) await cleanup(sessionID, request.requestID).catch(() => undefined);
@@ -252,6 +319,11 @@ export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgen
 
   return {
     review,
+    cancel: async (requestID: string) => {
+      for (const [sessionID, context] of [...owned]) {
+        if (context.requestID === requestID) await cleanup(sessionID, requestID).catch(() => undefined);
+      }
+    },
     isPluginSession: (sessionID: string) => owned.has(sessionID),
     handlePermission: async ({ requestID, sessionID }) => {
       if (!sessionID) return false;

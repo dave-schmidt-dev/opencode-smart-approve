@@ -72,6 +72,13 @@ offline checks with `bun run check`; run the attended exact-runtime checks with
 qualification evidence but cannot enable approval unless every locked gate passes.
 These checks do not install the plugin globally or enable model-backed approval.
 
+The coordinator-backed parity harness is an offline contract check:
+`bun test tests/eval/reviewer-contract-parity.test.ts`. It compares the
+production registration and reviewer payload with the evaluation contract,
+exercises negative controls, and compiles a disposable one-lock candidate
+without changing this checkout. It is contract evidence only; it does not
+qualify or enable model-backed approval.
+
 ## Verified OpenCode boundary
 
 OpenCode 1.18.10 publishes `permission.asked` events and accepts

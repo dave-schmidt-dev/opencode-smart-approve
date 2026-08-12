@@ -5,6 +5,7 @@ import { createProgressReporter, type ProgressMetrics, type ProgressReporter, ty
 import { evaluateDeterministicPolicy, type DeterministicPolicyResult } from "../policy/deterministic";
 import type { SmartApproveConfig } from "../config/schema";
 import type { ReviewerAgent, ReviewerResult } from "../reviewer/agent";
+import { createCapacityRejectedOutcome, createCoordinatorTimeoutOutcome, createOpaqueCoordinatorID, type CoordinatorReviewOutcome } from "../reviewer/contract";
 import { redactCommand } from "../reviewer/prompt";
 import { ApprovalStateStore, hashCommand, transition, type ApprovalRequestRecord, type ApprovalState } from "./state";
 
@@ -22,6 +23,9 @@ export interface ApprovalCoordinatorOptions {
   readonly metrics?: ProgressMetrics;
   readonly auditWriter?: AuditWriter;
   readonly timeoutMs?: number;
+  readonly directory?: string;
+  /** Observe typed pre-collapse outcomes without changing the native decision. */
+  readonly onReviewOutcome?: (outcome: CoordinatorReviewOutcome) => void;
   readonly onState?: (requestID: string, state: ApprovalState) => void;
 }
 
@@ -85,6 +89,7 @@ export function createApprovalCoordinator(options: ApprovalCoordinatorOptions): 
     commandShape: string;
     reasonCodes: string[];
     promptID: string;
+    readonly coordinatorID: string;
   }>();
   let active = 0;
   let disposed = false;
@@ -147,6 +152,8 @@ export function createApprovalCoordinator(options: ApprovalCoordinatorOptions): 
       return;
     }
     if (active >= cap) {
+      audit.reasonCodes = ["capacity_rejected"];
+      try { options.onReviewOutcome?.(createCapacityRejectedOutcome(audit.coordinatorID)); } catch { /* observers cannot affect native manual */ }
       finish(record, "manual");
       return;
     }
@@ -168,6 +175,8 @@ export function createApprovalCoordinator(options: ApprovalCoordinatorOptions): 
       const pathClasses = decision.pathClasses ?? ["unknown"];
       const reviewPromise = options.reviewer.review({
         requestID: request.requestID,
+        coordinatorID: audit.coordinatorID,
+        deadlineOwnedByCoordinator: true,
         parentSessionID: request.sessionID,
         prompt: redactCommand(request.command),
         redactedCommand: redactCommand(request.command),
@@ -181,18 +190,24 @@ export function createApprovalCoordinator(options: ApprovalCoordinatorOptions): 
       // aborted by a broad dispose call.
       const result: ReviewerResult = options.timeoutMs && options.timeoutMs > 0
         ? await Promise.race([
-          reviewPromise,
-          new Promise<never>((_, reject) => {
-            reviewTimer = setTimeout(() => {
-              try {
-                Promise.resolve(options.reviewer?.cancel?.(request.requestID)).catch(() => undefined);
-              } catch { /* cancellation failure cannot delay fail-closed timeout */ }
-              reject(new Error("reviewer timeout"));
-            }, options.timeoutMs);
-          }),
+            reviewPromise,
+            new Promise<never>((_, reject) => {
+              reviewTimer = setTimeout(() => {
+                try { options.onReviewOutcome?.(createCoordinatorTimeoutOutcome(audit.coordinatorID)); } catch { /* observers cannot affect fail-closed timeout */ }
+                try {
+                  Promise.resolve(options.reviewer?.cancel?.(request.requestID)).catch(() => undefined);
+                } catch { /* cancellation failure cannot delay fail-closed timeout */ }
+                reject(new Error("reviewer timeout"));
+              }, options.timeoutMs);
+            }),
         ])
         : await reviewPromise;
-      audit.reasonCodes = [...(result.reasonCodes ?? (result.decision === "allow" ? ["safe"] : ["manual_review"]))];
+      if (reviewTimer !== undefined) {
+        clearTimeout(reviewTimer);
+        reviewTimer = undefined;
+      }
+      audit.reasonCodes = [...(result.reasonCodes ?? (result.decision === "allow" ? ["safe"] : ["manual"]))];
+      try { if (result.outcome) options.onReviewOutcome?.(result.outcome); } catch { /* observers cannot affect native decision */ }
       if (store.get(request.requestID) !== record || record.commandHash !== hashCommand(request.command) || record.terminal) {
         if (record.state === "stale") reporter.finish("warning", "Permission was already answered; native prompt remains authoritative");
         return;
@@ -256,7 +271,13 @@ export function createApprovalCoordinator(options: ApprovalCoordinatorOptions): 
     if (disposed) return;
     const record = store.begin(request.requestID, request.command, request.sessionID);
     if (!record) return;
-    auditContexts.set(record, { startedAt: Date.now(), commandShape: "unparsed", reasonCodes: [], promptID: "none" });
+    auditContexts.set(record, {
+      startedAt: Date.now(),
+      commandShape: "unparsed",
+      reasonCodes: [],
+      promptID: "none",
+      coordinatorID: createOpaqueCoordinatorID(),
+    });
     notify(request.requestID, "received");
     await process(request, record);
   };

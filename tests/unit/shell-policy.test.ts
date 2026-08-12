@@ -170,6 +170,22 @@ describe("deterministic policy", () => {
     }
   });
 
+  test("routes exactly six prompt-manual identities away from model review by default", async () => {
+    for (const command of ["awk", "xargs", "find", "env", "command", "cmp", "/usr/bin/awk", "'cmp'"]) {
+      const result = await evaluateDeterministicPolicy(command, { config: { model: { enabled: true } } });
+      expect(result.status, command).toBe("manual");
+      expect(result.reasonCodes, command).toEqual(["manual_executable"]);
+    }
+    for (const command of ["awk '{print $1}'", "xargs rm", "find . -type f", "env FOO=bar echo ok", "command printf ok", "cmp file-a file-b"]) {
+      const result = await evaluateDeterministicPolicy(command, { config: { model: { enabled: true } } });
+      expect(result.status, command).toBe("manual");
+    }
+    for (const command of ["echo awk", "awkish", "printf cmp", "findings", "envoy"]) {
+      const result = await evaluateDeterministicPolicy(command, { config: { model: { enabled: true } } });
+      expect(result.reasonCodes, command).not.toContain("manual_executable");
+    }
+  });
+
   test("normalizes wrappers without searching arguments and preserves disabled/manual dominance", async () => {
     for (const command of ["awkish", "echo awk", "echo cmp", "echo 'awk; cmp'"]) {
       const enabled = await evaluateDeterministicPolicy(command, { config: { replan: { enabled: true }, model: { enabled: true } } });

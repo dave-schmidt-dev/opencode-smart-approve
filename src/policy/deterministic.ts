@@ -3,11 +3,11 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { parseBash, type BashParseResult } from "../parser/bash-parser";
 import { scanForSecrets, type SecretScanOptions, type SecretScanResult } from "../privacy/secret-scan";
 import { evaluateBuiltinRules, type BuiltinRuleReason } from "./builtin-rules";
-import { hasReplanExecutable } from "./executable-identity";
+import { findReplanExecutableIdentity } from "./executable-identity";
 import type { SmartApproveConfig } from "../config/schema";
 
 export type DeterministicDecision = "manual" | "model_review" | "replan";
-export type DeterministicReasonCode = BuiltinRuleReason | "parse_failure" | "privacy" | "path_identity" | "model_disabled" | "user_rule" | "invalid_command" | "replan";
+export type DeterministicReasonCode = BuiltinRuleReason | "parse_failure" | "privacy" | "path_identity" | "model_disabled" | "user_rule" | "invalid_command" | "replan" | "manual_executable";
 export type PolicyPathClass = "project" | "none";
 
 export interface PathIdentityOptions {
@@ -92,7 +92,14 @@ export async function evaluateDeterministicPolicy(
       return manual(["user_rule"], parse, privacy, pathIdentity.pathClasses);
     }
   }
-  if (options.config?.replan?.enabled === true && hasReplanExecutable(command)) return replan(parse, privacy, pathIdentity.pathClasses);
+  const executableIdentity = findReplanExecutableIdentity(command);
+  if (executableIdentity) {
+    // The six prompt-explicit identities are never eligible for model-backed
+    // approval. The opt-in replan route remains separate and preserves its
+    // fixed-feedback behavior without entering the reviewer.
+    if (options.config?.replan?.enabled === true) return replan(parse, privacy, pathIdentity.pathClasses);
+    return manual(["manual_executable"], parse, privacy, pathIdentity.pathClasses);
+  }
   if (options.config?.model?.enabled === false) return manual(["model_disabled"], parse, privacy, pathIdentity.pathClasses);
   return { status: "model_review", decision: "model_review", reasonCodes: [], parse, privacy, pathClasses: pathIdentity.pathClasses };
 }

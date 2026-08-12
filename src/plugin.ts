@@ -1,4 +1,5 @@
 import type { Config as OpenCodeConfig, Plugin } from "@opencode-ai/plugin";
+import type { AgentConfig } from "@opencode-ai/sdk";
 import { join } from "node:path";
 import { createApprovalCoordinator, type ApprovalCoordinator, type ApprovalCoordinatorOptions } from "./approval/coordinator";
 import { createAuditWriter, type AuditWriter } from "./audit/writer";
@@ -50,6 +51,39 @@ export interface SmartApproveHooks {
   /** Shared diagnostics used by the optional pre-execution replan guard. */
   readonly replanMetrics: ProgressMetrics;
   readonly replanAuditWriter: AuditWriter;
+}
+
+export type ReviewerRegistration = AgentConfig & {
+  readonly description: string;
+  readonly mode: "subagent";
+  readonly model: string;
+  readonly variant: string;
+  readonly temperature: 0;
+  readonly prompt: string;
+};
+
+/**
+ * Build the exact agent registration installed by the production config hook.
+ * Qualification code imports this function instead of maintaining a second
+ * copy of the registration contract.
+ */
+export function buildReviewerRegistration(config: SmartApproveConfig): ReviewerRegistration {
+  return {
+    description: "Tool-free command safety reviewer",
+    mode: "subagent",
+    model: `${config.model.provider}/${config.model.model}`,
+    variant: config.model.variant,
+    temperature: 0,
+    prompt: "Classify only the supplied bounded data. Never use tools or request permissions. Return strict JSON only.",
+    tools: REVIEWER_TOOL_DENY,
+    permission: {
+      edit: "deny",
+      bash: "deny",
+      webfetch: "deny",
+      doom_loop: "deny",
+      external_directory: "deny",
+    },
+  };
 }
 
 /** Return whether the configured shell can be interpreted by the Bash parser. */
@@ -112,6 +146,7 @@ export function createSmartApproveHooks(options: SmartApprovePluginOptions = {})
     progressSink: options.progressSink,
     metrics,
     auditWriter,
+    directory: options.directory,
     timeoutMs: options.timeoutMs ?? config.model.timeoutMs,
     onState: (requestID, state) => {
       const next = visibleState(state);
@@ -123,22 +158,7 @@ export function createSmartApproveHooks(options: SmartApprovePluginOptions = {})
   return {
     config: async (input) => {
       input.agent ??= {};
-      input.agent[REVIEWER_AGENT] = {
-        description: "Tool-free command safety reviewer",
-        mode: "subagent",
-        model: `${config.model.provider}/${config.model.model}`,
-        variant: config.model.variant,
-        temperature: 0,
-        prompt: "Classify only the supplied bounded data. Never use tools or request permissions. Return strict JSON only.",
-        tools: { ...REVIEWER_TOOL_DENY },
-        permission: {
-          edit: "deny",
-          bash: "deny",
-          webfetch: "deny",
-          doom_loop: "deny",
-          external_directory: "deny",
-        },
-      };
+      input.agent[REVIEWER_AGENT] = buildReviewerRegistration(config);
     },
     event: async (input) => {
       // Keep the OpenCode event bridge non-blocking while retaining a catch at
