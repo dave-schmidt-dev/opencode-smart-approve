@@ -49,6 +49,8 @@ const opencodeBinary = (environment: NodeJS.ProcessEnv): string | undefined => {
 export async function createDisposableOpenCode(options: {
   readonly fixturePath: string;
   readonly loaderPath?: string;
+  readonly loaderSource?: string;
+  readonly pluginOptions?: Record<string, unknown>;
 }): Promise<DisposableOpenCode> {
   const root = await mkdtemp(join(tmpdir(), "smart-approve-opencode-"));
   const configHome = join(root, "config");
@@ -65,9 +67,10 @@ export async function createDisposableOpenCode(options: {
   const configPath = join(configDir, "opencode.jsonc");
   const fixture = await readFile(options.fixturePath, "utf8");
   const loaderPath = options.loaderPath ?? join(root, "loader.mjs");
-  await writeFile(loaderPath, "throw new Error('disposable loader failure');\n", "utf8");
+  await writeFile(loaderPath, options.loaderSource ?? "throw new Error('disposable loader failure');\n", "utf8");
   // Keep the fixture's native ask posture and add only the disposable loader.
-  const config = `${fixture.replace(/\s*}\s*$/, "")}\n,\n  \"plugin\": [${JSON.stringify(loaderPath)}]\n}\n`;
+  const pluginEntry = options.pluginOptions === undefined ? JSON.stringify(loaderPath) : `[${JSON.stringify(loaderPath)}, ${JSON.stringify(options.pluginOptions)}]`;
+  const config = `${fixture.replace(/\s*}\s*$/, "")}\n,\n  \"plugin\": [${pluginEntry}]\n}\n`;
   await writeFile(configPath, config, "utf8");
   return {
     root,

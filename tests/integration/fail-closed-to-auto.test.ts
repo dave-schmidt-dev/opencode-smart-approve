@@ -24,6 +24,21 @@ describe("fail-closed routing", () => {
     }
   });
 
+  test("closed replan results remain native manual with no reviewer or reply edge", async () => {
+    const review = mock(async () => ({ decision: "allow" as const, requestID: "replan", sessionID: "child", toolCounters: zeroTools }));
+    const approve = mock(async () => undefined);
+    const coordinator = createApprovalCoordinator({
+      reviewer: { review },
+      approve,
+      modelEnabled: true,
+      policy: async () => ({ status: "replan" as unknown as "manual", decision: "replan" as const, reasonCodes: ["replan" as const], parse: undefined, privacy: undefined }),
+    });
+    await coordinator.handle({ ...request, requestID: "replan-native" });
+    expect(review).not.toHaveBeenCalled();
+    expect(approve).not.toHaveBeenCalled();
+    expect(coordinator.state("replan-native")).toBe("manual");
+  });
+
   test("every pre-reply exception is contained and emits zero permission replies", async () => {
     const cases = [
       { approve: mock(async () => undefined), reviewer: { review: async ({ requestID }: { requestID: string }) => ({ decision: "allow" as const, requestID, sessionID: "child", toolCounters: zeroTools }) }, policy: async () => { throw new Error("policy"); } },

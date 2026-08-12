@@ -81,7 +81,7 @@ interface LevelRecord {
   readonly expectedDecision: Decision;
   readonly excluded: boolean;
   readonly escalated: boolean;
-  readonly deterministicStatus: "manual" | "model_review";
+  readonly deterministicStatus: "manual" | "model_review" | "replan";
   readonly decisions: Record<Level, Decision>;
   readonly panelVotesAllow: number | null;
   readonly arCallsUsed: number | null;

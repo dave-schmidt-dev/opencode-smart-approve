@@ -1,4 +1,4 @@
-import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -14,6 +14,39 @@ const fixture = (unmapped = false): string => {
   );
   writeFileSync(join(root, "INVARIANTS.md"), "### INV-1\ngate_test: tests/spec/traceability.test.ts\n");
   writeFileSync(join(root, "tests/spec/traceability.test.ts"), "fixture");
+  return root;
+};
+
+const replanTraceErrors = (root: string): string[] => {
+  const spec = readFileSync(join(root, "SPEC.md"), "utf8");
+  const invariants = readFileSync(join(root, "INVARIANTS.md"), "utf8");
+  const traceability = readFileSync(join(root, "TRACEABILITY.md"), "utf8");
+  const errors: string[] = [];
+  if (!spec.includes("### REQ-014: Opt-in pre-execution replan")) errors.push("REQ-014 is missing");
+  if (!/^### INV-8[^\n]*\n(?:[^\n]*\n)*?gate_test:\s*tests\/integration\/replan-guard\.test\.ts$/m.test(invariants)) {
+    errors.push("INV-8 must name tests/integration/replan-guard.test.ts");
+  }
+  const replanMapping = traceability.match(/^\|\s*TASK-011\s*\|\s*REQ-014\s*\|(.+)\|$/m)?.[1] ?? "";
+  if (!replanMapping) errors.push("REQ-014 is not mapped to TASK-011");
+  if (/permission[-_/ ]reply/i.test(replanMapping)) errors.push("REQ-014 must not map to a permission-reply path");
+  return errors;
+};
+
+const replanFixture = (options: { readonly omitGate?: boolean; readonly permissionReply?: boolean } = {}): string => {
+  const root = mkdtempSync(join(tmpdir(), "smart-approve-replan-trace-"));
+  writeFileSync(join(root, "SPEC.md"), "### REQ-014: Opt-in pre-execution replan\n", "utf8");
+  writeFileSync(
+    join(root, "INVARIANTS.md"),
+    options.omitGate
+      ? "### INV-8\nthreshold: 3\n"
+      : "### INV-8\ngate_test: tests/integration/replan-guard.test.ts\nthreshold: 3\n",
+    "utf8",
+  );
+  writeFileSync(
+    join(root, "TRACEABILITY.md"),
+    `| TASK-011 | REQ-014 | tests/integration/${options.permissionReply ? "permission-reply" : "replan-guard"}.test.ts |\n`,
+    "utf8",
+  );
   return root;
 };
 
@@ -36,6 +69,28 @@ describe("spec traceability", () => {
     }
   });
 
+  test("rejects a replan fixture that omits the INV-8 gate", () => {
+    const root = replanFixture({ omitGate: true });
+    try {
+      expect(replanTraceErrors(root)).toContain("INV-8 must name tests/integration/replan-guard.test.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a replan fixture mapped to a permission-reply path", () => {
+    const root = replanFixture({ permissionReply: true });
+    try {
+      expect(replanTraceErrors(root)).toContain("REQ-014 must not map to a permission-reply path");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("maps the repository replan contract to INV-8 without a permission reply", () => {
+    expect(replanTraceErrors(process.cwd())).toEqual([]);
+  });
+
   test("rejects an empty or stale repository task queue", () => {
     const report = validateTraceability(process.cwd());
     expect(report.errors).toEqual([]);
@@ -50,6 +105,7 @@ describe("spec traceability", () => {
       "TASK-008",
       "TASK-009",
       "TASK-010",
+      "TASK-011",
     ]);
   });
 

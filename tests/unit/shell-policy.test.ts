@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseBash, validateGrammarChecksum } from "../../src/parser/bash-parser";
 import { MAX_AST_DEPTH, MAX_INPUT_BYTES, MAX_SEGMENTS } from "../../src/parser/limits";
+import { evaluateBuiltinRules } from "../../src/policy/builtin-rules";
 import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 
 describe("bounded Bash parser", () => {
@@ -158,5 +159,68 @@ describe("deterministic policy", () => {
     });
     expect(result.status).toBe("manual");
     expect(result.reasonCodes).toContain("model_disabled");
+  });
+
+  test("routes exactly six executable identities to closed replan when enabled", async () => {
+    for (const command of ["awk", "xargs", "find", "env", "command", "cmp", "/usr/bin/awk", "'awk'", "echo ok | awk"]) {
+      const result = await evaluateDeterministicPolicy(command, { config: { replan: { enabled: true }, model: { enabled: true } } });
+      expect(result.status as string, command).toBe("replan");
+      expect(result.decision, command).toBe("replan");
+      expect(result.reasonCodes).toEqual(["replan"]);
+    }
+  });
+
+  test("normalizes wrappers without searching arguments and preserves disabled/manual dominance", async () => {
+    for (const command of ["awkish", "echo awk", "echo cmp", "echo 'awk; cmp'"]) {
+      const enabled = await evaluateDeterministicPolicy(command, { config: { replan: { enabled: true }, model: { enabled: true } } });
+      expect(enabled.status, command).not.toBe("replan");
+    }
+    for (const command of ["env -i", "env -S awk", "command -p ls", "command env"]) {
+      const enabled = await evaluateDeterministicPolicy(command, { config: { replan: { enabled: true }, model: { enabled: true } } });
+      expect(enabled.status as string, command).toBe("replan");
+    }
+    expect((await evaluateDeterministicPolicy("awk", { config: { replan: { enabled: false }, model: { enabled: true } } })).status).not.toBe("replan");
+    expect((await evaluateDeterministicPolicy("find -delete", { config: { replan: { enabled: true }, model: { enabled: true } } })).status).toBe("manual");
+    expect((await evaluateDeterministicPolicy("awk", { config: { replan: { enabled: true }, model: { enabled: false } } })).status as string).toBe("replan");
+  });
+
+  test("applies safety rules to the command behind env and command wrappers", async () => {
+    for (const command of ["env -i rm", "command env rm", "env python", "command unknown-smart-approve-command"]) {
+      const result = await evaluateDeterministicPolicy(command, { config: { replan: { enabled: true }, model: { enabled: true } } });
+      expect(result.status, command).toBe("manual");
+      expect(result.reasonCodes.length, command).toBeGreaterThan(0);
+    }
+    for (const command of ["env -i rm", "command env rm"]) {
+      const parsed = await parseBash(command);
+      expect(parsed.ok, command).toBe(true);
+      if (parsed.ok) expect(evaluateBuiltinRules({ command, features: parsed.features }), command).toContain("dangerous_command");
+    }
+  });
+
+  test("retains path classes on a deterministic user-rule manual result", async () => {
+    const result = await evaluateDeterministicPolicy("cat README.md", {
+      config: { policy: { rules: [{ pattern: "README.md", action: "manual" }] } },
+    });
+    expect(result.status).toBe("manual");
+    expect(result.reasonCodes).toEqual(["user_rule"]);
+    expect(result.pathClasses).toEqual(["project"]);
+  });
+
+  test("keeps every broad manual reason dominant over a replan identity", async () => {
+    const cases = [
+      "awk .env",
+      "awk > output.txt",
+      "python -c awk",
+      "npm exec awk",
+      "echo $(awk)",
+      "awk | unknown-smart-approve-command",
+    ];
+    for (const command of cases) {
+      const result = await evaluateDeterministicPolicy(command, { config: { replan: { enabled: true }, model: { enabled: true } } });
+      expect(result.status as string, command).toBe("manual");
+    }
+    expect((await evaluateDeterministicPolicy("awk", {
+      config: { replan: { enabled: true }, model: { enabled: true }, policy: { rules: [{ pattern: "awk", action: "manual" }] } },
+    })).status as string).toBe("manual");
   });
 });

@@ -1,13 +1,17 @@
 import type { Config as OpenCodeConfig, Plugin } from "@opencode-ai/plugin";
 import { join } from "node:path";
 import { createApprovalCoordinator, type ApprovalCoordinator, type ApprovalCoordinatorOptions } from "./approval/coordinator";
-import { createAuditWriter } from "./audit/writer";
+import { createAuditWriter, type AuditWriter } from "./audit/writer";
 import { loadGlobalConfig } from "./config/load";
 import { DEFAULT_CONFIG, type SmartApproveConfig } from "./config/schema";
 import type { DeterministicPolicyResult } from "./policy/deterministic";
 import { createReviewerAgent, REVIEWER_AGENT, type ReviewerAgent, type ReviewerSessionClient } from "./reviewer/agent";
 import { REVIEWER_TOOL_DENY } from "./reviewer/client";
-import { createProgressMetrics, type ProgressMetricsSnapshot, type ProgressSink } from "./progress/reporter";
+import { createProgressMetrics, type ProgressMetrics, type ProgressMetricsSnapshot, type ProgressSink } from "./progress/reporter";
+import { createReplanGuard } from "./replan/guard";
+import { ReplanStateStore } from "./replan/state";
+import { verifyRuntimeVersion } from "./replan/runtime-version";
+import type { RuntimeHealthFetcher } from "./replan/runtime-version";
 
 export type RequestState = "reviewing" | "approved" | "manual" | "stale" | "timeout";
 
@@ -30,6 +34,8 @@ export interface SmartApprovePluginOptions {
   readonly shellCompatible?: boolean;
   readonly directory?: string;
   readonly onState?: (requestID: string, state: RequestState) => void;
+  /** Test seam; production uses the OpenCode server health endpoint. */
+  readonly runtimeHealthFetcher?: RuntimeHealthFetcher;
 }
 
 export interface SmartApproveHooks {
@@ -41,6 +47,9 @@ export interface SmartApproveHooks {
   readonly metricsSnapshot: () => ProgressMetricsSnapshot;
   /** Wait only for diagnostic writes; permission decisions never await this. */
   readonly flushDiagnostics: () => Promise<void>;
+  /** Shared diagnostics used by the optional pre-execution replan guard. */
+  readonly replanMetrics: ProgressMetrics;
+  readonly replanAuditWriter: AuditWriter;
 }
 
 /** Return whether the configured shell can be interpreted by the Bash parser. */
@@ -143,6 +152,8 @@ export function createSmartApproveHooks(options: SmartApprovePluginOptions = {})
     state: (requestID) => states.get(requestID),
     metricsSnapshot: metrics.snapshot,
     flushDiagnostics: auditWriter.flush,
+    replanMetrics: metrics,
+    replanAuditWriter: auditWriter,
   };
 }
 
@@ -151,6 +162,16 @@ export const SmartApprovePlugin: Plugin = async (input, options) => {
   const configured = (options ?? {}) as SmartApprovePluginOptions;
   const config = configured.config ?? await loadGlobalConfig();
   const shellCompatible = configured.shellCompatible ?? configuredShellCompatible();
+  const progressSink = configured.progressSink ?? {
+    tui: {
+      showToast: (toast: unknown) => {
+        const body = typeof toast === "object" && toast !== null && "body" in toast
+          ? (toast as { body: { message: string; variant: "info" | "success" | "warning" | "error"; title?: string; duration?: number } }).body
+          : { message: "Smart Approve review status", variant: "info" as const };
+        return input.client.tui.showToast({ body, query: { directory: configured.directory ?? input.directory } });
+      },
+    },
+  };
   const hooks = createSmartApproveHooks({
     ...configured,
     config,
@@ -167,18 +188,64 @@ export const SmartApprovePlugin: Plugin = async (input, options) => {
         query: { directory: configured.directory ?? input.directory },
       });
     }),
-    progressSink: configured.progressSink ?? {
-      tui: {
-        showToast: (toast) => {
-          const body = typeof toast === "object" && toast !== null && "body" in toast
-            ? (toast as { body: { message: string; variant: "info" | "success" | "warning" | "error"; title?: string; duration?: number } }).body
-            : { message: "Smart Approve review status", variant: "info" as const };
-          return input.client.tui.showToast({ body, query: { directory: configured.directory ?? input.directory } });
-        },
-      },
-    },
+    progressSink,
   });
-  return { config: hooks.config, event: (input) => hooks.event({ event: input.event }), dispose: hooks.dispose };
+  if (!config.replan.enabled) {
+    return { config: hooks.config, event: (eventInput) => hooks.event({ event: eventInput.event }), dispose: hooks.dispose };
+  }
+  const showRuntimeStatus = (message: string, variant: "info" | "success" | "warning"): void => {
+    const showToast = progressSink.tui?.showToast;
+    if (!showToast) return;
+    try {
+      Promise.resolve(showToast({ body: { title: "Smart Approve", message, variant } })).catch(() => undefined);
+    } catch { /* runtime status is non-authoritative */ }
+  };
+  showRuntimeStatus("Smart Approve checking runtime compatibility", "info");
+  const runtimeActive = await verifyRuntimeVersion(input.serverUrl, configured.runtimeHealthFetcher);
+  showRuntimeStatus(
+    runtimeActive ? "Smart Approve replan boundary active" : "Smart Approve replan boundary inactive; native permission remains available",
+    runtimeActive ? "success" : "warning",
+  );
+  if (!runtimeActive) {
+    return { config: hooks.config, event: (eventInput) => hooks.event({ event: eventInput.event }), dispose: hooks.dispose };
+  }
+
+  const replanState = new ReplanStateStore(config.replan.maxBlocksPerTurn);
+  const replanGuard = createReplanGuard({
+    state: replanState,
+    policy: configured.policy as never,
+    config,
+    progressSink,
+    metrics: hooks.replanMetrics,
+    auditWriter: hooks.replanAuditWriter,
+  });
+  const replanHooks = {
+    "chat.message": async (messageInput: { sessionID: string; messageID?: string }, output: { message?: { id?: string; role?: string } }) => {
+      if (output?.message?.role !== "user") return;
+      const messageID = typeof messageInput.messageID === "string" && messageInput.messageID.length > 0
+        ? messageInput.messageID
+        : typeof output.message?.id === "string" && output.message.id.length > 0 ? output.message.id : undefined;
+      if (messageID) replanState.observeUserMessage(messageInput.sessionID, messageID);
+    },
+    "tool.execute.before": async (toolInput: { tool: string; sessionID: string; callID: string }, output: { args: unknown }) => {
+      const generation = replanState.captureGeneration(toolInput.sessionID);
+      await replanGuard.before({ ...toolInput, generation }, output);
+    },
+  };
+  return {
+    config: hooks.config,
+    event: async (eventInput: { event: unknown }) => {
+      const event = eventInput.event as { type?: unknown; properties?: unknown };
+      if (event?.type === "session.deleted") {
+        const properties = event.properties as { id?: unknown; info?: { id?: unknown } } | undefined;
+        const sessionID = typeof properties?.info?.id === "string" ? properties.info.id : properties?.id;
+        if (typeof sessionID === "string") replanState.deleteSession(sessionID);
+      }
+      await hooks.event({ event: eventInput.event });
+    },
+    dispose: async () => { replanState.dispose(); await hooks.dispose(); },
+    ...replanHooks,
+  };
 };
 
 export default SmartApprovePlugin;

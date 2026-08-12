@@ -12,7 +12,7 @@ export const AuditRecordSchema = z.object({
   policyID: identifier,
   promptID: identifier,
   modelID: identifier,
-  decision: z.enum(["allow", "manual", "timeout", "error", "stale", "complete"]),
+  decision: z.enum(["allow", "manual", "timeout", "error", "stale", "complete", "replan_blocked"]),
   reasonCodes: z.array(reasonCode).max(32),
   latencyMs: z.number().int().nonnegative().max(86_400_000),
   raceState: z.enum(["none", "user_first", "not_found", "stale", "replying", "unknown"]),
@@ -55,7 +55,7 @@ const boundedReasons = (values: readonly string[] | undefined): string[] => (val
   .filter((value) => /^[a-z][a-z0-9_.-]{0,63}$/.test(value))
   .slice(0, 32);
 
-const decisions = new Set<AuditRecord["decision"]>(["allow", "manual", "timeout", "error", "stale", "complete"]);
+const decisions = new Set<AuditRecord["decision"]>(["allow", "manual", "timeout", "error", "stale", "complete", "replan_blocked"]);
 const races = new Set<AuditRecord["raceState"]>(["none", "user_first", "not_found", "stale", "replying", "unknown"]);
 
 /** Build a strict, redacted record. Raw command/prompt/output/env values never survive. */

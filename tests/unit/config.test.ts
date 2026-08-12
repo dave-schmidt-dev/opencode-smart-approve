@@ -9,6 +9,18 @@ describe("global configuration", () => {
     expect(config.model.enabled).toBe(false);
     expect(config.model.timeoutMs).toBe(30_000);
     expect(config.audit).toEqual({ enabled: false, maxBytes: 1_000_000, maxFiles: 2 });
+    expect(config.replan).toEqual({ enabled: false, maxBlocksPerTurn: 3 });
+  });
+
+  test("keeps replan independent from model enablement and validates its strict budget", () => {
+    expect(validateConfig({ model: { enabled: true } }).replan).toEqual({ enabled: false, maxBlocksPerTurn: 3 });
+    expect(validateConfig({ replan: { enabled: true } }).replan).toEqual({ enabled: true, maxBlocksPerTurn: 3 });
+    for (const value of [1, 3]) expect(validateConfig({ replan: { maxBlocksPerTurn: value } }).replan.maxBlocksPerTurn).toBe(value);
+    for (const value of [0, 4, 5, 6, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => validateConfig({ replan: { maxBlocksPerTurn: value } })).toThrow(ConfigValidationError);
+    }
+    expect(() => validateConfig({ replan: { unknown: true } })).toThrow(ConfigValidationError);
+    expect(() => validateConfig({ unknown: true })).toThrow(ConfigValidationError);
   });
 
   test("audit is opt-in with a strict directory and bounded rotation policy", () => {
@@ -45,6 +57,7 @@ describe("global configuration", () => {
     });
     expect(missing.source).toBe("global");
     expect(missing.model.enabled).toBe(false);
+    expect(missing.replan).toEqual({ enabled: false, maxBlocksPerTurn: 3 });
 
     await expect(loadGlobalConfig({
       globalPath: "/tmp/bad-global.json",

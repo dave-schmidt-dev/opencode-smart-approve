@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createApprovalCoordinator } from "../../src/approval/coordinator";
-import { createProgressMetrics, createProgressReporter, validateReviewTimeout } from "../../src/progress/reporter";
+import { createProgressMetrics, createProgressReporter, createReplanProgressReporter, validateReviewTimeout, type ProgressMetrics } from "../../src/progress/reporter";
 
 const modelReview = async () => ({
   status: "model_review" as const,
@@ -123,6 +123,12 @@ describe("persistent review progress", () => {
       timeoutCount: 1,
       manualFallbackCount: 1,
       cumulativeLatencyMs: 30_000,
+      replanAttemptCount: 0,
+      replanBlockedCount: 0,
+      replanDuplicateCount: 0,
+      replanExhaustionCount: 0,
+      replanFallthroughCount: 0,
+      replanInternalFailureCount: 0,
     });
   });
 
@@ -162,11 +168,18 @@ describe("persistent review progress", () => {
       "cumulativeLatencyMs",
       "heartbeatCount",
       "manualFallbackCount",
+      "replanAttemptCount",
+      "replanBlockedCount",
+      "replanDuplicateCount",
+      "replanExhaustionCount",
+      "replanFallthroughCount",
+      "replanInternalFailureCount",
       "reviewCount",
       "timeoutCount",
     ]);
     expect(JSON.stringify(snapshot)).not.toContain(canaryCommand);
     expect(snapshot.cumulativeLatencyMs).toBe(250);
+    expect(snapshot.replanAttemptCount).toBe(0);
   });
 
   test("accepts only the canary-qualified 10 to 60 second timeout range", () => {
@@ -176,5 +189,39 @@ describe("persistent review progress", () => {
     for (const invalid of [9_999, 60_001, 10_000.5, Number.NaN]) {
       expect(() => validateReviewTimeout(invalid)).toThrow(RangeError);
     }
+  });
+
+  test("replan progress has fixed start/terminal statuses and bounded counters", () => {
+    const statuses: Array<{ phase: string; status: string; message: string; variant: string }> = [];
+    const calls = { attempt: 0, blocked: 0, duplicate: 0, exhaustion: 0, fallthrough: 0, internalFailure: 0 };
+    const metrics = {
+      replanAttempt: () => { calls.attempt += 1; },
+      replanBlocked: () => { calls.blocked += 1; },
+      replanDuplicate: () => { calls.duplicate += 1; },
+      replanExhaustion: () => { calls.exhaustion += 1; },
+      replanFallthrough: () => { calls.fallthrough += 1; },
+      replanInternalFailure: () => { calls.internalFailure += 1; },
+    } as unknown as ProgressMetrics;
+    const reporter = createReplanProgressReporter({
+      metrics,
+      sink: { tui: { showToast: () => { throw new Error("sink unavailable"); } } },
+      onStatus: (status) => statuses.push(status),
+    });
+    reporter.start();
+    reporter.finish("exhausted_fallthrough", "exhausted");
+    reporter.finish("blocked");
+
+    expect(statuses).toEqual([
+      { phase: "started", status: "started", message: "Smart Approve replan attempt started", variant: "info" },
+      { phase: "finished", status: "exhausted_fallthrough", message: "Smart Approve replan exhausted; native permission remains available", variant: "info" },
+    ]);
+    expect(calls).toEqual({
+      attempt: 1,
+      blocked: 0,
+      duplicate: 0,
+      exhaustion: 1,
+      fallthrough: 1,
+      internalFailure: 0,
+    });
   });
 });

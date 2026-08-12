@@ -20,6 +20,12 @@ export interface ProgressMetricsSnapshot {
   readonly timeoutCount: number;
   readonly manualFallbackCount: number;
   readonly cumulativeLatencyMs: number;
+  readonly replanAttemptCount: number;
+  readonly replanBlockedCount: number;
+  readonly replanDuplicateCount: number;
+  readonly replanExhaustionCount: number;
+  readonly replanFallthroughCount: number;
+  readonly replanInternalFailureCount: number;
 }
 
 export interface ProgressMetrics {
@@ -27,6 +33,12 @@ export interface ProgressMetrics {
   readonly heartbeat?: () => void;
   readonly timeout?: () => void;
   readonly finish: (variant: Exclude<ProgressVariant, "info">, latencyMs: number) => void;
+  readonly replanAttempt?: () => void;
+  readonly replanBlocked?: () => void;
+  readonly replanDuplicate?: () => void;
+  readonly replanExhaustion?: () => void;
+  readonly replanFallthrough?: () => void;
+  readonly replanInternalFailure?: () => void;
   readonly snapshot: () => ProgressMetricsSnapshot;
 }
 
@@ -39,6 +51,12 @@ export function createProgressMetrics(): ProgressMetrics {
     timeoutCount: number;
     manualFallbackCount: number;
     cumulativeLatencyMs: number;
+    replanAttemptCount: number;
+    replanBlockedCount: number;
+    replanDuplicateCount: number;
+    replanExhaustionCount: number;
+    replanFallthroughCount: number;
+    replanInternalFailureCount: number;
   } = {
     reviewCount: 0,
     heartbeatCount: 0,
@@ -46,6 +64,12 @@ export function createProgressMetrics(): ProgressMetrics {
     timeoutCount: 0,
     manualFallbackCount: 0,
     cumulativeLatencyMs: 0,
+    replanAttemptCount: 0,
+    replanBlockedCount: 0,
+    replanDuplicateCount: 0,
+    replanExhaustionCount: 0,
+    replanFallthroughCount: 0,
+    replanInternalFailureCount: 0,
   };
   return {
     begin: () => { values.reviewCount += 1; },
@@ -56,7 +80,87 @@ export function createProgressMetrics(): ProgressMetrics {
       values.cumulativeLatencyMs += Number.isFinite(latencyMs) && latencyMs >= 0 ? latencyMs : 0;
       if (variant === "warning" || variant === "error") values.manualFallbackCount += 1;
     },
+    replanAttempt: () => { values.replanAttemptCount += 1; },
+    replanBlocked: () => { values.replanBlockedCount += 1; },
+    replanDuplicate: () => { values.replanDuplicateCount += 1; },
+    replanExhaustion: () => { values.replanExhaustionCount += 1; },
+    replanFallthrough: () => { values.replanFallthroughCount += 1; },
+    replanInternalFailure: () => { values.replanInternalFailureCount += 1; },
     snapshot: () => ({ ...values }),
+  };
+}
+
+export type ReplanTerminalStatus = "blocked" | "exhausted_fallthrough" | "internal_failure_fallthrough";
+
+export interface ReplanProgressStatus {
+  readonly phase: "started" | "finished";
+  readonly status: "started" | ReplanTerminalStatus;
+  readonly message: string;
+  readonly variant: ProgressVariant;
+}
+
+export interface ReplanProgressReporter {
+  readonly start: () => void;
+  readonly finish: (status: ReplanTerminalStatus, reason?: "duplicate" | "exhausted" | "fallthrough") => void;
+}
+
+export interface ReplanProgressReporterOptions {
+  readonly sink?: ProgressSink;
+  readonly metrics?: ProgressMetrics;
+  readonly onStatus?: (status: ReplanProgressStatus) => void;
+  readonly now?: () => number;
+}
+
+const REPLAN_MESSAGES: Readonly<Record<ReplanProgressStatus["status"], string>> = {
+  started: "Smart Approve replan attempt started",
+  blocked: "Smart Approve replan blocked",
+  exhausted_fallthrough: "Smart Approve replan exhausted; native permission remains available",
+  internal_failure_fallthrough: "Smart Approve replan unavailable; native permission remains available",
+};
+
+/** Fixed, command-free progress for the pre-execution replan boundary. */
+export function createReplanProgressReporter(options: ReplanProgressReporterOptions = {}): ReplanProgressReporter {
+  let started = false;
+  let finished = false;
+  let startedAt = 0;
+  const now = options.now ?? Date.now;
+  const emit = (phase: ReplanProgressStatus["phase"], status: ReplanProgressStatus["status"], variant: ProgressVariant): void => {
+    const bounded: ReplanProgressStatus = { phase, status, message: REPLAN_MESSAGES[status], variant };
+    try { options.onStatus?.(bounded); } catch { /* observers are non-authoritative */ }
+    const showToast = options.sink?.tui?.showToast;
+    if (!showToast) return;
+    try {
+      Promise.resolve(showToast({ body: { title: "Smart Approve", message: bounded.message, variant } })).catch(() => undefined);
+    } catch { /* a failing progress sink cannot affect routing */ }
+  };
+  const start = (): void => {
+    if (started || finished) return;
+    started = true;
+    startedAt = now();
+    try { options.metrics?.replanAttempt?.(); } catch { /* metrics are non-authoritative */ }
+    emit("started", "started", "info");
+  };
+  return {
+    start,
+    finish: (status, reason = status === "exhausted_fallthrough" ? "exhausted" : "fallthrough") => {
+      if (finished) return;
+      if (!started) start();
+      finished = true;
+      if (status === "blocked") {
+        try { options.metrics?.replanBlocked?.(); } catch { /* metrics are non-authoritative */ }
+      } else if (status === "exhausted_fallthrough") {
+        try {
+          if (reason === "exhausted") options.metrics?.replanExhaustion?.();
+          options.metrics?.replanFallthrough?.();
+        } catch { /* metrics are non-authoritative */ }
+      } else {
+        try {
+          options.metrics?.replanInternalFailure?.();
+          options.metrics?.replanFallthrough?.();
+        } catch { /* metrics are non-authoritative */ }
+      }
+      emit("finished", status, status === "internal_failure_fallthrough" ? "error" : status === "blocked" ? "warning" : "info");
+    },
   };
 }
 

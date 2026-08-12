@@ -79,3 +79,19 @@ threshold, including benign or ambiguity disagreement limits, dangerous false
 approval, secret disclosure, schema failure, or non-fail-closed error blocks
 enabling or releasing model-backed automatic approval. A source release is safe
 only while the immutable qualification lock remains disabled.
+
+### INV-8 — Pre-execution replan MUST be fixed-feedback, bounded, and manual-dominant
+area: ["src/replan/**/*.ts", "src/policy/**/*.ts", "src/plugin.ts"]
+gate_test: tests/integration/replan-guard.test.ts
+threshold: 3
+rationale: The opt-in replan path may interrupt an eligible Bash tool before
+permission or execution, but it has no permission-reply or reviewer capability.
+The exactly-six-identity static guidance catalog, a three-block generation
+budget, duplicate/stale handling, exact-runtime activation, and native-prompt
+fallthrough on ambiguity or error prevent the correction signal from becoming
+an execution bypass. Read-only decomposition carries only bounded returned text
+through sequential native calls and never recreates a pipeline in Bash.
+Current static feedback never captures goal context or runtime values. Owner-
+authorized goal-aware redirection is not implemented; any future extension must
+preserve this pre-execution, bounded, manual-dominant contract and must not
+execute or rewrite commands, reply to permission requests, or approve them.

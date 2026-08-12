@@ -7,6 +7,7 @@ export const DEFAULT_MODEL_VARIANT = "max" as const;
 export const DEFAULT_TIMEOUT_MS = 30_000 as const;
 export const DEFAULT_AUDIT_MAX_BYTES = 1_000_000 as const;
 export const DEFAULT_AUDIT_MAX_FILES = 2 as const;
+export const DEFAULT_REPLAN_MAX_BLOCKS_PER_TURN = 3 as const;
 
 const UserRuleSchema = z.object({
   pattern: z.string().min(1),
@@ -40,6 +41,11 @@ const AuditConfigSchema = z.object({
   maxFiles: z.number().int().min(2).max(8).default(DEFAULT_AUDIT_MAX_FILES),
 }).strict();
 
+const ReplanSchema = z.object({
+  enabled: z.boolean().default(false),
+  maxBlocksPerTurn: z.number().int().min(1).max(DEFAULT_REPLAN_MAX_BLOCKS_PER_TURN).default(DEFAULT_REPLAN_MAX_BLOCKS_PER_TURN),
+}).strict();
+
 const DEFAULT_MODEL = {
   enabled: false,
   provider: DEFAULT_MODEL_PROVIDER,
@@ -50,6 +56,7 @@ const DEFAULT_MODEL = {
 const DEFAULT_LIMITS = { maxInputBytes: MAX_INPUT_BYTES, maxAstDepth: MAX_AST_DEPTH, maxSegments: MAX_SEGMENTS };
 const DEFAULT_POLICY = { rules: [], sensitivePathPatterns: [], secretPatterns: [] };
 const DEFAULT_AUDIT = { enabled: false, maxBytes: DEFAULT_AUDIT_MAX_BYTES, maxFiles: DEFAULT_AUDIT_MAX_FILES };
+const DEFAULT_REPLAN = { enabled: false, maxBlocksPerTurn: DEFAULT_REPLAN_MAX_BLOCKS_PER_TURN };
 
 export const configSchema = z.object({
   source: z.literal("global").default("global"),
@@ -57,6 +64,7 @@ export const configSchema = z.object({
   limits: LimitsSchema.default(DEFAULT_LIMITS),
   policy: PolicySchema.default(DEFAULT_POLICY),
   audit: AuditConfigSchema.default(DEFAULT_AUDIT),
+  replan: ReplanSchema.default(DEFAULT_REPLAN),
 }).strict();
 export const ConfigSchema = configSchema;
 
@@ -65,6 +73,7 @@ export type ModelConfig = z.infer<typeof ModelSchema>;
 export type LimitsConfig = z.infer<typeof LimitsSchema>;
 export type PolicyConfig = z.infer<typeof PolicySchema>;
 export type AuditConfig = z.infer<typeof AuditConfigSchema>;
+export type ReplanConfig = z.infer<typeof ReplanSchema>;
 export type SmartApproveConfig = z.infer<typeof configSchema>;
 
 export const DEFAULT_CONFIG = Object.freeze({
@@ -73,6 +82,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   limits: Object.freeze(DEFAULT_LIMITS),
   policy: Object.freeze(DEFAULT_POLICY),
   audit: Object.freeze(DEFAULT_AUDIT),
+  replan: Object.freeze(DEFAULT_REPLAN),
 }) as SmartApproveConfig;
 
 export class ConfigValidationError extends Error {

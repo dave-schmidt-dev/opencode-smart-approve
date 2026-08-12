@@ -3,10 +3,11 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { parseBash, type BashParseResult } from "../parser/bash-parser";
 import { scanForSecrets, type SecretScanOptions, type SecretScanResult } from "../privacy/secret-scan";
 import { evaluateBuiltinRules, type BuiltinRuleReason } from "./builtin-rules";
+import { hasReplanExecutable } from "./executable-identity";
 import type { SmartApproveConfig } from "../config/schema";
 
-export type DeterministicDecision = "manual" | "model_review";
-export type DeterministicReasonCode = BuiltinRuleReason | "parse_failure" | "privacy" | "path_identity" | "model_disabled" | "user_rule" | "invalid_command";
+export type DeterministicDecision = "manual" | "model_review" | "replan";
+export type DeterministicReasonCode = BuiltinRuleReason | "parse_failure" | "privacy" | "path_identity" | "model_disabled" | "user_rule" | "invalid_command" | "replan";
 export type PolicyPathClass = "project" | "none";
 
 export interface PathIdentityOptions {
@@ -22,6 +23,7 @@ export interface PathIdentityOptions {
 export interface DeterministicPolicyOptions {
   readonly config?: {
     readonly model?: Pick<SmartApproveConfig["model"], "enabled">;
+    readonly replan?: Pick<SmartApproveConfig["replan"], "enabled">;
     readonly policy?: {
       readonly rules?: SmartApproveConfig["policy"]["rules"];
       readonly sensitivePathPatterns?: SmartApproveConfig["policy"]["sensitivePathPatterns"];
@@ -49,18 +51,20 @@ const manual = (
   pathClasses?: readonly PolicyPathClass[],
 ): DeterministicPolicyResult => ({ status: "manual", decision: "manual", reasonCodes, parse, privacy, pathClasses });
 
+const replan = (parse: BashParseResult, privacy: SecretScanResult, pathClasses: readonly PolicyPathClass[]): DeterministicPolicyResult => ({
+  status: "replan", decision: "replan", reasonCodes: ["replan"], parse, privacy, pathClasses,
+});
+
 /**
  * Run the parser, privacy boundary, and deterministic rules in precedence order.
  * This function intentionally has no approval adapter and can only return the
- * two routing states consumed by the reviewer coordinator.
+ * routing states consumed by the reviewer coordinator and pre-execution guard.
  */
 export async function evaluateDeterministicPolicy(
   command: string,
   options: DeterministicPolicyOptions = {},
 ): Promise<DeterministicPolicyResult> {
   if (typeof command !== "string" || command.length === 0) return manual(["invalid_command"]);
-  if (options.config?.model?.enabled === false) return manual(["model_disabled"]);
-
   const parse = await parseBash(command);
   if (!parse.ok) return manual(["parse_failure"], parse);
 
@@ -80,14 +84,16 @@ export async function evaluateDeterministicPolicy(
   if (!pathIdentity.stable) return manual(["path_identity"], parse, privacy, pathIdentity.pathClasses);
 
   const reasons = [...evaluateBuiltinRules({ command, features: parse.features })];
-  if (reasons.length) return manual(reasons, parse, privacy);
+  if (reasons.length) return manual(reasons, parse, privacy, pathIdentity.pathClasses);
 
   const userRules = options.config?.policy?.rules ?? [];
   for (const rule of userRules) {
     if (rule.pattern && command.includes(rule.pattern) && rule.action === "manual") {
-      return manual(["user_rule"], parse, privacy);
+      return manual(["user_rule"], parse, privacy, pathIdentity.pathClasses);
     }
   }
+  if (options.config?.replan?.enabled === true && hasReplanExecutable(command)) return replan(parse, privacy, pathIdentity.pathClasses);
+  if (options.config?.model?.enabled === false) return manual(["model_disabled"], parse, privacy, pathIdentity.pathClasses);
   return { status: "model_review", decision: "model_review", reasonCodes: [], parse, privacy, pathClasses: pathIdentity.pathClasses };
 }
 

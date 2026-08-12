@@ -161,6 +161,35 @@ describe("privacy-preserving audit", () => {
     expect(first.commandShapeHash).toBe(second.commandShapeHash);
   });
 
+  test("persists a redacted replan_blocked record with hashed call identity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "smart-approve-replan-audit-"));
+    const writer = createAuditWriter({ enabled: true, directory });
+    const callID = "call-replan-canary";
+    await writer.append({
+      requestHash: createAuditRecord({ requestID: callID, decision: "manual" }).requestHash,
+      command: "awk SECRET_REPLAN_CANARY",
+      commandShape: "replan",
+      policyID: "replan-v1",
+      promptID: "none",
+      modelID: "none",
+      decision: "replan_blocked",
+      reasonCodes: ["replan"],
+      latencyMs: 4,
+      raceState: "none",
+    });
+    await writer.flush();
+    const text = await readFile(join(directory, "smart-approve-audit.jsonl"), "utf8");
+    expect(text).not.toContain("SECRET_REPLAN_CANARY");
+    expect(text).not.toContain("awk");
+    expect(parseAuditRecord(JSON.parse(text))).toMatchObject({
+      decision: "replan_blocked",
+      policyID: "replan-v1",
+      reasonCodes: ["replan"],
+      raceState: "none",
+      latencyMs: 4,
+    });
+  });
+
   test("captures a sanitized snapshot before asynchronous persistence", async () => {
     const directory = await mkdtemp(join(tmpdir(), "smart-approve-audit-snapshot-"));
     const input = { requestID: "before", commandShape: "word", decision: "manual" };

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { appendFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, mock, test } from "bun:test";
@@ -20,10 +20,13 @@ const asked = (id: string, command: string, sessionID = "parent-session") => ({
   properties: { id, sessionID, permission: "bash", metadata: { command } },
 });
 
-const waitFor = async (predicate: () => boolean, timeoutMs = 10_000): Promise<void> => {
+const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-  if (!predicate()) throw new Error(`condition not met within ${timeoutMs}ms`);
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (!(await predicate())) throw new Error(`condition not met within ${timeoutMs}ms`);
 };
 
 const withDeadline = async <T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
@@ -257,26 +260,124 @@ interface RuntimeCanary {
   readonly provider: ReturnType<typeof Bun.serve>;
   readonly nonTitleProviderCalls: () => number;
   readonly createSession: (parentID?: string) => Promise<{ id: string; parentID?: string }>;
-  readonly prompt: (sessionID: string, signal?: AbortSignal, text?: string) => Promise<Response>;
-  readonly promptAsync: (sessionID: string, text?: string) => Promise<Response>;
+  readonly prompt: (sessionID: string, signal?: AbortSignal, text?: string, messageID?: string) => Promise<Response>;
+  readonly promptAsync: (sessionID: string, text?: string, messageID?: string) => Promise<Response>;
+  readonly listMessages: (sessionID: string) => Promise<readonly Record<string, unknown>[]>;
+  readonly readPluginLog: () => Promise<readonly Record<string, unknown>[]>;
   readonly cleanup: () => Promise<void>;
 }
 
-const startRuntimeCanary = async (): Promise<RuntimeCanary> => {
+type RuntimePluginMode = "none" | "exact" | "missing" | "malformed" | "different";
+
+const runtimeContractPlugin = (logPath: string, mode: RuntimePluginMode): string => `
+
+const expected = "1.18.10";
+const mode = ${JSON.stringify(mode)};
+const logPath = ${JSON.stringify(logPath)};
+let writeTail = Promise.resolve();
+const write = (entry) => {
+  const current = writeTail.then(async () => {
+  const bounded = Object.fromEntries(Object.entries(entry).slice(0, 8));
+  const previous = await Bun.file(logPath).text().catch(() => "");
+  await Bun.write(logPath, previous + JSON.stringify(bounded) + "\\n");
+  });
+  writeTail = current.catch(() => undefined);
+  return current;
+};
+const shape = (value) => value === undefined ? "missing" : typeof value === "string" ? "string" : "other";
+let active = false;
+let hookErrors = 0;
+const seenMessageIDs = new Set();
+let lifecycleReady;
+const lifecycle = async (serverUrl) => {
+  if (lifecycleReady) return lifecycleReady;
+  lifecycleReady = (async () => {
+    let signal;
+    try {
+      const response = await fetch(new URL("/global/health", serverUrl));
+      signal = response.ok ? await response.json() : undefined;
+    } catch { signal = undefined; }
+    const version = mode === "exact" ? signal?.version
+      : mode === "missing" ? undefined
+        : mode === "malformed" ? { version: expected }
+          : mode === "different" ? "1.18.11" : undefined;
+    active = typeof version === "string" && version === expected;
+    await write({ kind: "lifecycle", shape: shape(version), exact: active, active });
+    return active;
+  })();
+  return lifecycleReady;
+};
+
+export const RuntimeContractCanary = async (input) => {
+  return ({
+  "chat.message": async (hookInput, output) => {
+    const enabled = await lifecycle(input.serverUrl);
+    const role = output?.message?.role;
+    const messageID = typeof hookInput.messageID === "string" && hookInput.messageID.length > 0
+      ? hookInput.messageID
+      : typeof output?.message?.id === "string" && output.message.id.length > 0
+        ? output.message.id
+        : undefined;
+    const hasMessageID = messageID !== undefined;
+    const duplicate = hasMessageID && seenMessageIDs.has(messageID);
+    if (messageID) seenMessageIDs.add(messageID);
+    await write({ kind: "generation", enabled, user: role === "user", messageID: hasMessageID, duplicate, newGeneration: hasMessageID && !duplicate });
+  },
+  "tool.execute.before": async (hookInput, output) => {
+    const enabled = await lifecycle(input.serverUrl);
+    const hasSessionID = typeof hookInput.sessionID === "string" && hookInput.sessionID.length > 0;
+    const hasCallID = typeof hookInput.callID === "string" && hookInput.callID.length > 0;
+    const isBash = hookInput.tool === "bash";
+    await write({ kind: "before", enabled, bash: isBash, hasSessionID, hasCallID, argsObject: typeof output?.args === "object" && output.args !== null });
+    if (enabled && isBash && hookErrors < 2) {
+      hookErrors += 1;
+      await write({ kind: "hook-error", count: hookErrors });
+      throw new Error("SMART_APPROVE_REPLAN: blocked shell approach; use native tools or a different command");
+    }
+  },
+  });
+};
+
+export default RuntimeContractCanary;
+`;
+
+type RuntimeProviderMode = "bash-then-final" | "bash-then-native" | "stubborn";
+
+const startRuntimeCanary = async (options: { readonly pluginMode?: RuntimePluginMode; readonly providerMode?: RuntimeProviderMode } = {}): Promise<RuntimeCanary> => {
   const root = await mkdtemp(join(tmpdir(), "smart-approve-runtime-"));
   const configHome = join(root, "config");
   const dataHome = join(root, "data");
   const stateHome = join(root, "state");
   const cacheHome = join(root, "cache");
   const configDir = join(configHome, "opencode");
+  const projectDir = join(root, "project");
+  const pluginPath = join(root, "runtime-contract-canary.mjs");
+  const pluginLogPath = join(root, "runtime-contract-canary.jsonl");
   let nonTitleProviderCalls = 0;
+  const firstRequestFor = new Set<string>();
   const provider = Bun.serve({
     port: 0,
     fetch: async (request) => {
       const requestBody = await request.text();
       const title = requestBody.includes("title generator");
       if (!title) nonTitleProviderCalls += 1;
-      return localCompletion(title, requestBody.includes("parallel-permission"));
+      const parallel = requestBody.includes("parallel-permission");
+      const requestKey = parallel ? "parallel-permission"
+        : requestBody.includes("main bash") ? "main bash"
+          : requestBody.includes("subagent bash") ? "subagent bash"
+            : requestBody.includes("async bash") ? "async bash"
+              : requestBody.includes("stubborn fresh call IDs") ? "stubborn fresh call IDs"
+                : requestBody.includes("duplicate delivery") ? "duplicate delivery"
+                  : requestBody.includes("later delivery") ? "later delivery"
+                    : "default";
+      const firstForKey = !firstRequestFor.has(requestKey);
+      firstRequestFor.add(requestKey);
+      if (title) return localCompletion(true);
+      if (options.providerMode === "stubborn") return localCompletion(false, parallel);
+      if (options.providerMode === undefined) return localCompletion(false, parallel);
+      if (firstForKey) return localCompletion(false, parallel);
+      if (options.providerMode === "bash-then-native") return localCompletion(false, false, true);
+      return localCompletion(true);
     },
   });
   let baseURL = "";
@@ -299,6 +400,7 @@ const startRuntimeCanary = async (): Promise<RuntimeCanary> => {
   };
   try {
     await mkdir(configDir, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
     await mkdir(dataHome, { recursive: true });
     await mkdir(stateHome, { recursive: true });
     await mkdir(cacheHome, { recursive: true });
@@ -308,15 +410,20 @@ const startRuntimeCanary = async (): Promise<RuntimeCanary> => {
       permission: { bash: "ask" },
       provider: { local: { npm: "@ai-sdk/openai-compatible", name: "Local", options: { baseURL: `http://127.0.0.1:${provider.port}/v1`, apiKey: "test" }, models: { test: { name: "test", tool_call: true, limit: { context: 32_768, output: 4_096 } } } } },
     };
+    if (options.pluginMode && options.pluginMode !== "none") {
+      await writeFile(pluginPath, runtimeContractPlugin(pluginLogPath, options.pluginMode), "utf8");
+      (config as { plugin?: string[] }).plugin = [`file://${pluginPath}`];
+    }
     await writeFile(join(configDir, "opencode.jsonc"), JSON.stringify(config));
     requireOpenCodeVersion({ configHome, dataHome, stateHome, cacheHome });
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const port = await reservePort();
       baseURL = `http://127.0.0.1:${port}`;
-      child = Bun.spawn([opencodeBinary, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
+      child = Bun.spawn([opencodeBinary, "serve", ...(process.env.STALL_CANARY_DEBUG === "1" ? ["--print-logs", "--log-level", "DEBUG"] : []), "--port", String(port), "--hostname", "127.0.0.1"], {
         env: { ...globalThis.process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_STATE_HOME: stateHome, XDG_CACHE_HOME: cacheHome },
+        cwd: projectDir,
         stdout: "ignore",
-        stderr: "ignore",
+        stderr: process.env.STALL_CANARY_DEBUG === "1" ? "inherit" : "ignore",
       });
       try {
         await waitForServer(baseURL, 5_000, () => child?.exitCode !== null);
@@ -342,18 +449,29 @@ const startRuntimeCanary = async (): Promise<RuntimeCanary> => {
         if (!response.ok) throw new Error(`session creation failed: ${response.status}`);
         return await response.json() as { id: string; parentID?: string };
       },
-      prompt: (sessionID, signal, text = "run disposable canary") => fetch(`${baseURL}/session/${sessionID}/message`, {
+      prompt: (sessionID, signal, text = "run disposable canary", messageID) => fetch(`${baseURL}/session/${sessionID}/message`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: { providerID: "local", modelID: "test" }, agent: "build", parts: [{ type: "text", text }] }),
+        body: JSON.stringify({ model: { providerID: "local", modelID: "test" }, agent: "build", ...(messageID ? { messageID } : {}), parts: [{ type: "text", text }] }),
         signal,
       }),
-      promptAsync: (sessionID, text = "run disposable canary") => fetch(`${baseURL}/session/${sessionID}/prompt_async`, {
+      promptAsync: (sessionID, text = "run disposable canary", messageID) => fetch(`${baseURL}/session/${sessionID}/prompt_async`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: { providerID: "local", modelID: "test" }, agent: "build", parts: [{ type: "text", text }] }),
+        body: JSON.stringify({ model: { providerID: "local", modelID: "test" }, agent: "build", ...(messageID ? { messageID } : {}), parts: [{ type: "text", text }] }),
         signal: AbortSignal.timeout(5_000),
       }),
+      listMessages: async (sessionID) => {
+        const response = await fetch(`${baseURL}/session/${sessionID}/message`, { signal: AbortSignal.timeout(5_000) });
+        if (!response.ok) throw new Error(`message list failed: ${response.status}`);
+        return await response.json() as readonly Record<string, unknown>[];
+      },
+      readPluginLog: async () => {
+        try {
+          const text = await readFile(pluginLogPath, "utf8");
+          return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+        } catch { return []; }
+      },
       cleanup,
     };
   } catch (error) {
@@ -362,9 +480,11 @@ const startRuntimeCanary = async (): Promise<RuntimeCanary> => {
   }
 };
 
-const localCompletion = (title: boolean, twoToolCalls = false): Response => {
+const localCompletion = (title: boolean, twoToolCalls = false, nativeAlternative = false): Response => {
   const chunks = title
     ? [{ delta: { role: "assistant", content: "Canary" }, finish_reason: null }, { delta: {}, finish_reason: "stop" }]
+    : nativeAlternative
+      ? [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "canary-glob", type: "function", function: { name: "glob", arguments: "" } }] }, finish_reason: null }, { delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ pattern: "README.md" }) } }] }, finish_reason: null }, { delta: {}, finish_reason: "tool_calls" }]
     : twoToolCalls
       ? [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "canary-call-one", type: "function", function: { name: "bash", arguments: "" } }, { index: 1, id: "canary-call-two", type: "function", function: { name: "bash", arguments: "" } }] }, finish_reason: null }, { delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command: "printf one" }) } }, { index: 1, function: { arguments: JSON.stringify({ command: "printf two" }) } }] }, finish_reason: null }, { delta: {}, finish_reason: "tool_calls" }]
       : [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "canary-call", type: "function", function: { name: "bash", arguments: "" } }] }, finish_reason: null }, { delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command: "printf canary" }) } }] }, finish_reason: null }, { delta: {}, finish_reason: "tool_calls" }];
@@ -708,6 +828,107 @@ describe("OpenCode 1.18.10 contract canary", () => {
       await canary.cleanup();
     }
   }, { timeout: SHORT_CANARY_TIMEOUT_MS });
+
+  test.serial("production tool hook contract binds lifecycle, generations, and call identity", async () => {
+    const canary = await startRuntimeCanary({ pluginMode: "exact", providerMode: "bash-then-final" });
+    const parentAbort = new AbortController();
+    const childAbort = new AbortController();
+    try {
+      const parent = await canary.createSession();
+      const parentMessage = await canary.prompt(parent.id, parentAbort.signal, "run main bash");
+      expect(parentMessage.status).toBe(200);
+
+      const child = await canary.createSession(parent.id);
+      const childMessage = await canary.prompt(child.id, childAbort.signal, "run subagent bash");
+      expect(childMessage.status).toBe(200);
+
+      const asyncSession = await canary.createSession();
+      expect((await canary.promptAsync(asyncSession.id, "run async bash")).status).toBe(204);
+      await waitFor(async () => (await canary.readPluginLog()).filter((entry) => entry.kind === "before").length >= 3, 15_000);
+
+      const records = await canary.readPluginLog();
+      const lifecycle = records.filter((entry) => entry.kind === "lifecycle");
+      const generations = records.filter((entry) => entry.kind === "generation");
+      const before = records.filter((entry) => entry.kind === "before" && entry.bash === true);
+      const errors = records.filter((entry) => entry.kind === "hook-error");
+      expect(lifecycle).toContainEqual(expect.objectContaining({ shape: "string", exact: true, active: true }));
+      expect(generations.length).toBe(3);
+      expect(generations.every((entry) => entry.user === true && entry.messageID === true)).toBe(true);
+      expect(generations.filter((entry) => entry.duplicate === true)).toHaveLength(0);
+      expect(before.length).toBeGreaterThanOrEqual(3);
+      expect(before.every((entry) => entry.enabled === true && entry.hasSessionID === true && entry.hasCallID === true)).toBe(true);
+      expect(errors.length).toBe(2);
+    } finally {
+      parentAbort.abort();
+      childAbort.abort();
+      await canary.cleanup();
+    }
+  }, { timeout: SHORT_CANARY_TIMEOUT_MS });
+
+  test.serial("production tool hook contract deduplicates a message ID and starts a later generation", async () => {
+    const canary = await startRuntimeCanary({ pluginMode: "exact", providerMode: "bash-then-final" });
+    try {
+      const session = await canary.createSession();
+      expect((await canary.promptAsync(session.id, "duplicate delivery")).status).toBe(204);
+      await waitFor(async () => (await canary.listMessages(session.id)).length > 0, 15_000);
+      const first = await canary.listMessages(session.id);
+      const fixedID = ((first[0]?.info as Record<string, unknown> | undefined)?.id as string | undefined);
+      expect(fixedID).toBeTruthy();
+      await sleep(200);
+      expect((await canary.promptAsync(session.id, "duplicate delivery", fixedID)).status).toBe(204);
+      await sleep(200);
+      expect((await canary.promptAsync(session.id, "later delivery")).status).toBe(204);
+      await sleep(500);
+      const generations = (await canary.readPluginLog()).filter((entry) => entry.kind === "generation");
+      expect(generations.length).toBeGreaterThanOrEqual(2);
+      expect(generations.filter((entry) => entry.newGeneration === true)).toHaveLength(2);
+      expect(generations.filter((entry) => entry.duplicate === true)).toHaveLength(1);
+    } finally {
+      await canary.cleanup();
+    }
+  }, { timeout: SHORT_CANARY_TIMEOUT_MS });
+
+  test.serial("production tool hook contract bounds stubborn fresh-call-ID retries before native Bash ask", async () => {
+    const canary = await startRuntimeCanary({ pluginMode: "exact", providerMode: "stubborn" });
+    const abort = new AbortController();
+    try {
+      const session = await canary.createSession();
+      const message = canary.prompt(session.id, abort.signal, "stubborn fresh call IDs");
+      void message.catch(() => undefined);
+      const pending = await waitForPendingPermission(canary.baseURL, session.id, 15_000);
+      expect(pending.id).toBeTruthy();
+      const records = await canary.readPluginLog();
+      expect(records.filter((entry) => entry.kind === "hook-error")).toHaveLength(2);
+      expect(records.filter((entry) => entry.kind === "before" && entry.bash === true).length).toBeGreaterThanOrEqual(3);
+      expect(records.filter((entry) => entry.kind === "before" && entry.enabled === true).every((entry) => entry.hasCallID === true)).toBe(true);
+      await fetch(`${canary.baseURL}/session/${session.id}/abort`, { method: "POST", signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
+      abort.abort();
+    } finally {
+      abort.abort();
+      await canary.cleanup();
+    }
+  }, { timeout: SHORT_CANARY_TIMEOUT_MS });
+
+  test.serial("production tool hook contract stays inactive for missing, malformed, or different lifecycle evidence", async () => {
+    for (const pluginMode of ["missing", "malformed", "different"] as const) {
+      const canary = await startRuntimeCanary({ pluginMode, providerMode: "bash-then-final" });
+      const abort = new AbortController();
+      try {
+        const session = await canary.createSession();
+        const message = canary.prompt(session.id, abort.signal, `inactive ${pluginMode}`);
+        void message.catch(() => undefined);
+        await waitForPendingPermission(canary.baseURL, session.id, 15_000);
+        const records = await canary.readPluginLog();
+        expect(records).toContainEqual(expect.objectContaining({ kind: "lifecycle", exact: false, active: false }));
+        expect(records.filter((entry) => entry.kind === "hook-error")).toHaveLength(0);
+        expect(records.filter((entry) => entry.kind === "before").every((entry) => entry.enabled === false)).toBe(true);
+        await fetch(`${canary.baseURL}/session/${session.id}/abort`, { method: "POST", signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
+      } finally {
+        abort.abort();
+        await canary.cleanup();
+      }
+    }
+  }, { timeout: SHORT_CANARY_TIMEOUT_MS * 3 });
 
   test.if(process.env.RUN_LONG_STALL_CANARY === "1")("contract independently lists a held permission at 5 and 60 minutes", async () => {
     const canary = await startRuntimeCanary();

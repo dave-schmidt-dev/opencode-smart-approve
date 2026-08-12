@@ -33,6 +33,26 @@ plugin remains fail-closed with model-backed automatic approval disabled by an
 immutable release gate. The failed report is retained locally under the
 gitignored `eval-results/` directory; it is not qualification evidence.
 
+The six identity-specific replan micro-plans are static, disabled-default
+guidance for blocked shell attempts; their presence is not qualification
+evidence. The 42-scenario usefulness result is
+directional only; it is not qualification evidence and does not enable
+model-backed approval or auto-approval.
+
+Replan requires an explicit `replan.enabled: true` owner opt-in; installation
+does not set it. It can block only `awk`, `xargs`, `find`, `env`, `command`, or
+`cmp`, and only three distinct blocked calls per user-message generation. It
+then falls through to OpenCode's native Bash permission prompt. Replan never
+executes or rewrites a command, replies to a permission request, or guarantees
+task completion.
+
+Static prompt tuning is stopped. The current enriched catalog is retained;
+the compact-catalog candidate remains test-only and was not promoted. Goal-aware
+or goal-specific redirection is owner-authorized future work, not implemented in
+this build. Any future extension must remain pre-execution and preserve the
+boundaries above: it must not execute or rewrite commands, reply to permission
+requests, or approve them.
+
 ## Installation and removal
 
 This repository is not published to npm. A local checkout may be linked from the

@@ -21,7 +21,7 @@ export interface BuiltinRule {
 
 /** Commands whose syntax is sufficiently ordinary for model review. */
 export const KNOWN_COMMANDS = new Set([
-  "awk", "basename", "cat", "cd", "cmp", "cut", "date", "dirname", "echo", "env",
+  "awk", "basename", "cat", "cd", "cmp", "command", "cut", "date", "dirname", "echo", "env",
   "false", "find", "git", "grep", "head", "join", "less", "ls", "mkdir", "printf",
   "pwd", "readlink", "rg", "rm", "sed", "sort", "stat", "tail", "tee", "test",
   "tr", "true", "uniq", "wc", "which", "xargs", "realpath",
@@ -29,14 +29,6 @@ export const KNOWN_COMMANDS = new Set([
 
 const INTERPRETERS = /^(?:(?:ba|z|fi|c|k)?sh|python|pypy|node|deno|bun|ruby|perl|php|lua|pwsh|powershell)(?:\d+(?:\.\d+)*)?$/i;
 const PACKAGE_MANAGERS = new Set(["npm", "npx", "pnpm", "yarn", "bun"]);
-
-function firstCommand(command: string): string | undefined {
-  const tokens = command.match(/(?:[^\s"']+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')+/g) ?? [];
-  let index = 0;
-  while (index < tokens.length && /^(?:[A-Za-z_][A-Za-z0-9_]*=|export$)/.test(tokens[index] ?? "")) index += 1;
-  while (index < tokens.length && ["command", "builtin", "exec", "env"].includes(tokens[index] ?? "")) index += 1;
-  return tokens[index]?.replace(/^['"]|['"]$/g, "").split("/").at(-1)?.toLowerCase();
-}
 
 function packageScript(context: BuiltinRuleContext): boolean {
   // Package managers execute lifecycle hooks even for commands that do not
@@ -102,6 +94,45 @@ export const evaluateBuiltinPolicy = evaluateBuiltinRules;
 function commandExecutables(command: string): string[] {
   return command
     .split(/(?:\|\||&&|[|;&])/)
-    .map((segment) => firstCommand(segment))
-    .filter((value): value is string => value !== undefined);
+    .flatMap((segment) => segmentExecutables(segment));
+}
+
+/**
+ * Return both a wrapper and the command it invokes. Replan identities such
+ * as `env` and `command` are retained, but their effective command must also
+ * pass the ordinary safety checks (for example, `env -i rm` is dangerous).
+ */
+function segmentExecutables(segment: string): string[] {
+  const tokens = segment.match(/(?:[^\s"']+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')+/g) ?? [];
+  const executables: string[] = [];
+  let index = 0;
+  while (index < tokens.length && /^(?:[A-Za-z_][A-Za-z0-9_]*=|export$)/.test(tokens[index] ?? "")) index += 1;
+  while (index < tokens.length && ["builtin", "exec"].includes(tokens[index] ?? "")) index += 1;
+
+  while (index < tokens.length) {
+    const executable = tokens[index]?.replace(/^['"]|['"]$/g, "").split("/").at(-1)?.toLowerCase();
+    if (!executable) break;
+    executables.push(executable);
+    index += 1;
+
+    if (executable === "command") {
+      // `command -p/-v/-V` options do not change the following command.
+      while (index < tokens.length && /^-/.test(tokens[index] ?? "")) index += 1;
+      continue;
+    }
+    if (executable === "env") {
+      // Skip env options and their operands, then inspect the effective command.
+      while (index < tokens.length) {
+        const token = tokens[index] ?? "";
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) { index += 1; continue; }
+        if (token === "--") { index += 1; break; }
+        if (!token.startsWith("-")) break;
+        if (["-u", "--unset", "-C", "--chdir"].includes(token)) index += 2;
+        else index += 1;
+      }
+      continue;
+    }
+    break;
+  }
+  return executables;
 }

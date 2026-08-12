@@ -13,7 +13,9 @@ permission only when a mandatory constrained model review supports approval. The
 current build has not qualified its candidate model, so model-backed automatic
 approval remains disabled.
 Deterministic parsing and policy may force manual handling but never grant permission
-in the MVP. Every uncertain outcome remains an ordinary human choice.
+in the MVP. Every uncertain outcome remains an ordinary human choice. REQ-014 is a
+separate disabled-by-default pre-execution block that never grants permission and
+falls through to the native Bash prompt on uncertainty or budget exhaustion.
 
 ## 2. MVP audience and outcome
 
@@ -32,6 +34,10 @@ approval. The current build does not meet that outcome: qualification failed.
 - Deterministic parser/privacy hard blocks with no local auto-allow tier.
 - Mandatory model review for every command eligible for auto-approval.
 - One-shot permission replies, progress display, bounded audit records, and tests.
+- An independent, disabled-by-default pre-execution replan boundary for the
+  reviewed six command identities. It blocks before permission or execution,
+  supplies fixed feedback, and returns to the native Bash prompt after its
+  bounded per-user-turn limit.
 - Personal global installation first, packaged so public npm publication remains
   possible after release approval.
 
@@ -39,7 +45,12 @@ approval. The current build does not meet that outcome: qualification failed.
 
 - File-edit, MCP, browser, network, task, or external-directory permissions.
 - Automatic persistent (`always`) approvals.
-- Automatic rejection of commands; unsafe or uncertain means the user decides.
+- Automatic permission rejection, including V2 reject replies, sibling handling,
+  or deny-loop continuation configuration.
+- Broad automatic blocking, model-derived blocking, command rewriting, custom
+  execution, model retry/panel logic, qualification bypass, or autonomous
+  unbounded continuation. The narrow opt-in pre-execution replan boundary is
+  specified by REQ-014.
 - Operating-system sandboxing or containment of OpenCode itself.
 - Learning rules from approval history.
 - Ralph-loop or other unattended implementation automation.
@@ -47,7 +58,10 @@ approval. The current build does not meet that outcome: qualification failed.
 
 ## 4. End-to-end flow
 
-1. OpenCode emits `permission.asked` and keeps its native prompt pending.
+1. When the independently enabled REQ-014 boundary matches one of its six fixed
+   identities, the plugin blocks Bash before OpenCode creates a permission request
+   or executes the command; otherwise OpenCode emits `permission.asked` and keeps
+   its native prompt pending.
 2. The plugin validates the runtime payload and ignores non-`bash` permissions.
 3. The command is scanned for secrets before any provider-bound operation.
 4. A Bash parser produces an AST and a bounded feature summary.
@@ -461,6 +475,48 @@ genuinely blind on the fixtures discussed above.
   - [ ] The final check fails when a requirement, task, test, or invariant mapping
     is missing.
 
+### REQ-014: Opt-in pre-execution replan
+
+- Type: Security
+- Priority: P1
+- Description: An explicit owner opt-in may give the agent one bounded,
+  capability-free correction opportunity before a Bash tool reaches OpenCode's
+  native permission path. The feature is a fixed-feedback replan signal, not a
+  permission decision or a command-rewriting layer.
+- Acceptance criteria:
+  - [ ] `replan.enabled` defaults to `false` independently of `model.enabled`;
+    installation never changes the global setting.
+  - [ ] Only the six code-owned executable identities `awk`, `xargs`, `find`,
+    `env`, `command`, and `cmp` can produce the closed `replan` policy result;
+    manual policy reasons dominate in every ambiguous or unsafe case.
+  - [ ] A block is raised from the pre-execution tool hook with one of the
+    compile-time static catalog messages; it may name only the six fixed
+    identities and native tools, and contains no dynamic command text,
+    arguments, paths, user-message content, provider output, environment value,
+    or secret bytes.
+  - [ ] Feedback uses a finite static catalog for exactly `awk`, `xargs`,
+    `find`, `env`, `command`, and `cmp`; each entry states its unsafe property,
+    one bounded native-tool alternative, its shell-fallback prohibition,
+    and the native-prompt stop instruction. Read-only recovery guidance
+    decomposes work into sequential native calls carrying only bounded returned
+    text and never recreates a pipeline as separate Bash commands, wrappers,
+    substitutions, or loops. The current static guidance does not capture goal
+    context or interpolate runtime values. Owner-authorized goal-aware or
+    goal-specific redirection is future work, not implemented here; any future
+    extension must remain pre-execution and must not execute or rewrite commands,
+    reply to permission requests, or approve them.
+  - [ ] One user-message generation may reserve at most three distinct blocked
+    calls; duplicate delivery is idempotent, stale or exhausted calls fall
+    through to the native Bash prompt, and a new user message resets only its
+    own session state.
+  - [ ] Replan never replies to a permission request, sends `reject` or
+    `always`, retries a model reviewer, rewrites a command, or promises task
+    completion; ambiguity and every internal failure remain on the native
+    manual side.
+  - [ ] Production activation requires exact pinned-runtime evidence for
+    OpenCode `1.18.10`; missing, malformed, or mismatched evidence leaves the
+    feature inactive.
+
 ## 7. Non-functional requirements
 
 - The event callback must yield control within 50 ms before asynchronous review.
@@ -521,7 +577,9 @@ permission authority without schema, state, and deterministic hard-block checks.
 5. Repeated commands are re-evaluated and re-reviewed; verdicts are not cached.
 6. Automatic replies use `once` only.
 7. Default model timeout is 30 seconds and progress is visible.
-8. Unsafe and uncertain results remain manual; the plugin does not auto-reject.
+8. Unsafe and uncertain results remain manual. The only automatic block is the
+   disabled-by-default REQ-014 pre-execution boundary; it sends no permission reply
+   and returns to the native prompt after its bounded limit.
 9. No autonomous implementation loop is installed.
 
 ## 12. Verified facts and assumptions

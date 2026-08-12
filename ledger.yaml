@@ -7,4 +7,14 @@ invariants:
   INV-5: {gate_test_status: covered}
   INV-6: {gate_test_status: covered}
   INV-7: {gate_test_status: covered}
+  INV-8:
+    gate_test_status: covered
+    requirement: REQ-014
+    evidence:
+      policy: tests/unit/shell-policy.test.ts
+      guidance: tests/unit/replan-guidance.test.ts
+      guard: tests/integration/replan-guard.test.ts
+      privacy: tests/security/audit-redaction.test.ts
+      progress: tests/integration/progress.test.ts
+      e2e: tests/e2e/opencode-contract-canary.test.ts
 resolutions: {}
