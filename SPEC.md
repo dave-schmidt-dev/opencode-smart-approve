@@ -23,7 +23,10 @@ The MVP is for a developer running OpenCode interactively who wants Codex- or
 Claude-like safe-command automation. The intended success case is routine low-risk
 commands proceeding without user action, every candidate command being reviewed by
 a qualified DeepSeek V4 Flash reviewer, and no error path turning into an automatic
-approval. The current build does not meet that outcome: qualification failed.
+approval. The current build does not meet that outcome: private release
+qualification is incomplete.
+The development branch has since been re-run against a source-current frozen
+candidate and passed; private release qualification remains incomplete.
 
 ## 3. Scope
 
@@ -319,7 +322,7 @@ held-out set (see below), and a separately reverted structural prompt rewrite
 recorded 4 on development -- so this category is not immune to the same
 provider jitter and needs its own resolution, not just the rate re-derivation.
 
-Current gate result: **failed**. An initial live development report (superseded,
+Historical gate result: **failed**. An initial live development report (superseded,
 retained at `eval-results/classifier-qualification.failed.json` before the
 threshold re-derivation) recorded 61/200 benign false manual decisions
 (limit 10), 8 ambiguous disagreements (limit 0), and 33 other disagreements
@@ -467,6 +470,23 @@ adjustment, and is left to the project owner. This held-out corpus is now
 partially spent regardless of which resolution is chosen: a fresh held-out
 corpus is required before any future qualification run can be treated as
 genuinely blind on the fixtures discussed above.
+
+Current recovery checkpoint: the source-current candidate manifest is
+`912f21a472125b96715f844a95c0a04fdbcb252eaa71720ff28b9dce088c4eda`. Its
+aggregate development report is `development-pass`: 95 fixtures, five repeats,
+475 invocations, 225 provider calls, zero invalid runs, zero critical false
+approvals, zero critical or ambiguous disagreements, zero other disagreements,
+0/200 benign false-manual observations, 15/15 error-path manual observations,
+and 2.299-second p95 latency. The report contains aggregate fields only and is
+validated against the candidate and current source/config hashes.
+
+The exact-runtime candidate canary, public-synthetic custody/parity suites,
+offline/package/spec gates, and OpenCode 1.18.10 integration and contract
+canaries pass. The release branch remains `release-disabled` because no fresh
+private corpus, independent adjudicator, or human custodian has been supplied;
+no private bytes were read and no custody state was created. Provider weights
+and served variant remain unattested, and `MODEL_APPROVAL_QUALIFIED` remains
+`false`.
 
 ### REQ-012: Compatibility and packaging
 

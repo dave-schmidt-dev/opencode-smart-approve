@@ -22,9 +22,11 @@ const asked = (id: string, command: string) => ({
 });
 const tick = (ms = 25) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const waitForHTTP = async (url: string): Promise<void> => {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    try { if ((await fetch(url)).ok) return; } catch { /* server still starting */ }
+const waitForHTTP = async (url: string, child: ReturnType<typeof Bun.spawn>): Promise<void> => {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error("disposable OpenCode server exited during startup");
+    try { if ((await fetch(url, { signal: AbortSignal.timeout(500) })).ok) return; } catch { /* server still starting */ }
     await tick(25);
   }
   throw new Error("disposable OpenCode server did not become ready");
@@ -89,6 +91,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     await portReservation.stop(true);
     if (!port) throw new Error("failed to reserve OpenCode port");
     const serverURL = `http://127.0.0.1:${port}`;
+    const projectCwd = await mkdtemp(join(tmpdir(), "smart-approve-opencode-project-"));
     const config = {
       "$schema": "https://opencode.ai/config.json",
       model: "local/test",
@@ -96,13 +99,14 @@ describe("OpenCode 1.18.10 disposable integration", () => {
       provider: { local: { npm: "@ai-sdk/openai-compatible", name: "Local", options: { baseURL: `http://127.0.0.1:${provider.port}/v1`, apiKey: "test" }, models: { test: { name: "test", tool_call: true, limit: { context: 32_768, output: 4_096 } } } } },
       plugin: [[join(sandbox.root, "loader.mjs"), { config: runtimeConfig }]],
     };
+    await writeFile(sandbox.configPath, JSON.stringify(config), "utf8");
     const child = Bun.spawn([DEFAULT_OPENCODE_BINARY, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
+      cwd: projectCwd,
       env: { ...process.env, XDG_CONFIG_HOME: sandbox.configHome, XDG_DATA_HOME: sandbox.dataHome, XDG_STATE_HOME: sandbox.stateHome, XDG_CACHE_HOME: sandbox.cacheHome },
       stdout: "ignore", stderr: process.env.STALL_CANARY_DEBUG === "1" ? "inherit" : "ignore",
     });
     try {
-      await writeFile(sandbox.configPath, JSON.stringify(config), "utf8");
-      await waitForHTTP(`${serverURL}/global/health`);
+      await waitForHTTP(`${serverURL}/global/health`, child);
       const sessionResponse = await fetch(`${serverURL}/session`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "live replan" }) });
       const session = await sessionResponse.json() as { id: string };
       const messageAbort = new AbortController();
@@ -133,6 +137,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
       await stopChild(child);
       await stopProvider(provider);
       await sandbox.cleanup();
+      await rm(projectCwd, { recursive: true, force: true });
       await rm(auditDirectory, { recursive: true, force: true });
     }
   }, { timeout: 120_000 });
@@ -164,6 +169,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
       await portReservation.stop(true);
       if (!port) throw new Error("failed to reserve OpenCode port");
       const serverURL = `http://127.0.0.1:${port}`;
+      const projectCwd = await mkdtemp(join(tmpdir(), "smart-approve-opencode-project-"));
       const config = {
         "$schema": "https://opencode.ai/config.json",
         model: "local/test",
@@ -171,13 +177,14 @@ describe("OpenCode 1.18.10 disposable integration", () => {
         provider: { local: { npm: "@ai-sdk/openai-compatible", name: "Local", options: { baseURL: `http://127.0.0.1:${provider.port}/v1`, apiKey: "test" }, models: { test: { name: "test", tool_call: true, limit: { context: 32_768, output: 4_096 } } } } },
         plugin: [[join(sandbox.root, "loader.mjs"), { config: runtimeConfig }]],
       };
+      await writeFile(sandbox.configPath, JSON.stringify(config), "utf8");
       const child = Bun.spawn([DEFAULT_OPENCODE_BINARY, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
+        cwd: projectCwd,
         env: { ...process.env, XDG_CONFIG_HOME: sandbox.configHome, XDG_DATA_HOME: sandbox.dataHome, XDG_STATE_HOME: sandbox.stateHome, XDG_CACHE_HOME: sandbox.cacheHome },
         stdout: "ignore", stderr: process.env.STALL_CANARY_DEBUG === "1" ? "inherit" : "ignore",
       });
       try {
-        await writeFile(sandbox.configPath, JSON.stringify(config), "utf8");
-        await waitForHTTP(`${serverURL}/global/health`);
+        await waitForHTTP(`${serverURL}/global/health`, child);
         const sessionResponse = await fetch(`${serverURL}/session`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: `live ${mode}` }) });
         const session = await sessionResponse.json() as { id: string };
         const messageAbort = new AbortController();
@@ -201,11 +208,12 @@ describe("OpenCode 1.18.10 disposable integration", () => {
         await stopChild(child);
         await stopProvider(provider);
         await sandbox.cleanup();
+        await rm(projectCwd, { recursive: true, force: true });
         await rm(auditDirectory, { recursive: true, force: true });
       }
     }
   }, { timeout: 120_000 });
-  test("production plugin exact-runtime replan gate blocks three calls then preserves native fallthrough", async () => {
+  test.serial("production plugin exact-runtime replan gate blocks three calls then preserves native fallthrough", async () => {
     const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => new Response(JSON.stringify({ version: "1.18.10" }), { status: 200 })) as unknown as typeof fetch);
     const plugin = await SmartApprovePlugin({ client: { tui: { showToast: async () => true } }, directory: "/owned/project", serverUrl: new URL("http://127.0.0.1:4096") } as never, {
       config: { ...DEFAULT_CONFIG, replan: { enabled: true, maxBlocksPerTurn: 3 } },
@@ -224,7 +232,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     }
   });
 
-  test("production plugin leaves replan hooks inactive for disabled and mismatched runtime", async () => {
+  test.serial("production plugin leaves replan hooks inactive for disabled and mismatched runtime", async () => {
     const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => new Response(JSON.stringify({ version: "1.18.11" }), { status: 200 })) as unknown as typeof fetch);
     const input = { client: { tui: { showToast: async () => true } }, directory: "/owned/project", serverUrl: new URL("http://127.0.0.1:4096") } as never;
     const disabled = await SmartApprovePlugin(input, { config: { ...DEFAULT_CONFIG, replan: { enabled: false, maxBlocksPerTurn: 3 } } });
@@ -235,7 +243,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     await mismatch.dispose?.();
     fetchSpy.mockRestore();
   });
-  test("smoke uses the installed binary and isolated XDG config/data/cache", async () => {
+  test.serial("smoke uses the installed binary and isolated XDG config/data/cache", async () => {
     const sandbox = await createDisposableOpenCode({ fixturePath });
     try {
       const result = runOpenCodeVersion(sandbox);
@@ -255,7 +263,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     }
   });
 
-  test("version seam defaults locally and rejects mismatched, malformed, empty, and failed overrides", async () => {
+  test.serial("version seam defaults locally and rejects mismatched, malformed, empty, and failed overrides", async () => {
     const sandbox = await createDisposableOpenCode({ fixturePath });
     const fakeBin = await mkdtemp(join(tmpdir(), "smart-approve-fake-opencode-"));
     try {
@@ -287,7 +295,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     }
   });
 
-  test("version seam rejects missing and non-executable explicit overrides before spawning", async () => {
+  test.serial("version seam rejects missing and non-executable explicit overrides before spawning", async () => {
     const sandbox = await createDisposableOpenCode({ fixturePath });
     const fakeBin = await mkdtemp(join(tmpdir(), "smart-approve-non-executable-opencode-"));
     const nonExecutableBinary = join(fakeBin, "opencode");
@@ -313,7 +321,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     }
   });
 
-  test("plugin-load failure leaves the native shell request pending", async () => {
+  test.serial("plugin-load failure leaves the native shell request pending", async () => {
     const sandbox = await createDisposableOpenCode({ fixturePath });
     const pending = new Set(["load-failure"]);
     const hooks = createSmartApproveHooks({ approve: mock(async (id: string) => { pending.delete(id); }) });
@@ -330,7 +338,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     }
   });
 
-  test("model approval remains disabled even for a matching allow result", async () => {
+  test.serial("model approval remains disabled even for a matching allow result", async () => {
     const pending = new Set(["model-allow"]);
     const promptBodies: unknown[] = [];
     const reviewer = createReviewerAgent({
@@ -355,7 +363,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     }
   });
 
-  test("unsafe and disabled-model requests preserve the pending prompt", async () => {
+  test.serial("unsafe and disabled-model requests preserve the pending prompt", async () => {
     const pending = new Set(["unsafe", "timeout", "error"]);
     const review = mock(async () => { throw new Error("provider must not be called"); });
     const hooks = createSmartApproveHooks({
@@ -379,7 +387,7 @@ describe("OpenCode 1.18.10 disposable integration", () => {
     }
   });
 
-  test("disabled model does not attempt a user-first reply race", async () => {
+  test.serial("disabled model does not attempt a user-first reply race", async () => {
     const reply = mock(async () => { throw new Error("permission not found"); });
     const hooks = createSmartApproveHooks({
       reviewer: { review: async () => ({ decision: "allow" as const, requestID: "race", sessionID: "race-review", toolCounters: ZERO_TOOL_COUNTERS }) },

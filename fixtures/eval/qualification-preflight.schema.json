@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-qualification-preflight/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "terminal", "candidateManifestHash", "developmentReportHash", "developmentAggregateDigest", "development", "release", "productionLock", "preflightHash"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-qualification-preflight/v1" },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "terminal": { "const": "development_failed" },
+    "candidateManifestHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "developmentReportHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "developmentAggregateDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "development": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failureCode", "invocations", "providerCalls", "invalidRunCount", "classifierDenominator"],
+      "properties": {
+        "failureCode": { "type": "string", "minLength": 1 },
+        "invocations": { "type": "integer", "minimum": 0 },
+        "providerCalls": { "type": "integer", "minimum": 0 },
+        "invalidRunCount": { "type": "integer", "minimum": 0 },
+        "classifierDenominator": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "providerCalls", "privateByteReads", "namedCorpusRoles", "custodyTransition"],
+      "properties": {
+        "status": { "const": "not_created" },
+        "providerCalls": { "const": 0 },
+        "privateByteReads": { "const": 0 },
+        "namedCorpusRoles": { "const": 0 },
+        "custodyTransition": { "const": "none" }
+      }
+    },
+    "productionLock": { "const": false },
+    "preflightHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

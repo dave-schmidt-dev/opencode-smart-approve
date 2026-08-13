@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-terminal-attestation/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "terminal", "decision", "verification", "candidateManifestHash", "developmentReportHash", "custodyManifestHash", "providerCalls", "privateByteReads", "custodyTransition", "providerWeights", "servedVariant", "productionLock", "attestationHash"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-terminal-attestation/v1" },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "terminal": { "const": "development_failed" },
+    "decision": { "const": "release-disabled" },
+    "verification": { "const": "not_independently_recomputable" },
+    "candidateManifestHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "developmentReportHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "custodyManifestHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "providerCalls": { "const": 0 },
+    "privateByteReads": { "const": 0 },
+    "custodyTransition": { "const": "none" },
+    "providerWeights": { "const": "unattested" },
+    "servedVariant": { "const": "unattested" },
+    "productionLock": { "const": false },
+    "attestationHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

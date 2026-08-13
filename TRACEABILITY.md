@@ -11,7 +11,7 @@ This release map is separate from the local-only task queue and history.
 | TASK-005 | REQ-008 | tests/integration/progress.test.ts; tests/e2e/opencode-contract-canary.test.ts |
 | TASK-006 | REQ-009 | tests/unit/config.test.ts; tests/unit/shell-policy.test.ts |
 | TASK-007 | REQ-010 | tests/security/audit-redaction.test.ts |
-| TASK-008 | REQ-011 | tests/eval/classifier-gate.test.ts; tests/eval/qualification-custody.test.ts; tests/integration/progress.test.ts; tests/spec/traceability.test.ts |
+| TASK-008 | REQ-011 | tests/eval/classifier-gate.test.ts; tests/eval/qualification-custody.test.ts; tests/eval/qualification-terminal.test.ts; tests/eval/reviewer-contract-parity.test.ts; tests/integration/progress.test.ts; tests/spec/traceability.test.ts |
 | TASK-009 | REQ-012 | tests/package/package.test.ts; tests/spec/traceability.test.ts; tests/e2e/opencode-1.18.10.test.ts |
 | TASK-010 | REQ-013 | tests/spec/traceability.test.ts |
 | TASK-011 | REQ-014 | tests/unit/config.test.ts; tests/unit/shell-policy.test.ts; tests/unit/replan-guidance.test.ts; tests/integration/replan-guard.test.ts; tests/integration/fail-closed-to-auto.test.ts; tests/integration/progress.test.ts; tests/security/audit-redaction.test.ts; tests/e2e/opencode-contract-canary.test.ts; tests/e2e/opencode-1.18.10.test.ts |
@@ -29,6 +29,21 @@ staleness-only and explicitly does not attest immutable model revision or served
 variant.
 
 The fixed-candidate selector is `tests/eval/classifier-gate.test.ts` :: `freezes one source-current candidate with no provider or held-out attestation`; it covers the singular candidate, current hashes, unavailable provider/served-variant status, and empty spent-heldout arrays.
+
+## Current qualification recovery evidence
+
+The source-current development terminal report is validated by
+`scripts/classifier-gate.ts` and bound to
+`eval-results/frozen-candidate-manifest.json`. Its aggregate-only contract and
+invalid-run/no-retry behavior are covered by
+`tests/eval/classifier-gate.test.ts`. The failure-only no-corpus terminal branch
+is covered by `tests/eval/qualification-terminal.test.ts` and implemented in
+`scripts/qualification/verify-terminal.ts`; it was not invoked for the current
+development pass. The exact-runtime candidate lock canary and production/
+evaluation parity are covered by `tests/eval/reviewer-contract-parity.test.ts`.
+The release checkpoint is recorded in
+`eval-results/qualification-release-gate.md`; it is `release-disabled` pending
+fresh private corpus authorship, independent adjudication, and human custody.
 
 ## INV-7 runner evidence
 

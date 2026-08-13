@@ -57,5 +57,9 @@ describe("package recovery and allowlist", () => {
     expect(scripts.check).not.toContain("test:e2e");
     expect(scripts["test:offline"]).not.toContain("opencode");
     expect(scripts["test:offline"]).not.toContain("provider");
+    expect(scripts["test:e2e"]).toContain("test:e2e:integration");
+    expect(scripts["test:e2e"]).toContain("test:e2e:canary");
+    expect(scripts["test:e2e:integration"]).toContain("--max-concurrency=1");
+    expect(scripts["test:e2e:canary"]).toContain("--max-concurrency=1");
   });
 });

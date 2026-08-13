@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { appendFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { describe, expect, mock, test } from "bun:test";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { createApprovalAdapter } from "../../src/opencode/client";
@@ -173,7 +173,8 @@ const reservePort = async (): Promise<number> => {
   return port;
 };
 
-const opencodeBinary = process.env.OPENCODE_BIN ?? DEFAULT_OPENCODE_BINARY;
+const configuredOpencodeBinary = process.env.OPENCODE_BIN ?? DEFAULT_OPENCODE_BINARY;
+const opencodeBinary = isAbsolute(configuredOpencodeBinary) ? configuredOpencodeBinary : resolve(process.cwd(), configuredOpencodeBinary);
 const SHORT_CANARY_TIMEOUT_MS = 90_000;
 
 type PendingPermission = {

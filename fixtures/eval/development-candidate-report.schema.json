@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-development-report/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "terminal", "opencodeVersion", "model", "variant", "candidateManifestHash", "hashes", "sourceManifest", "contract", "development", "faults", "aggregateDigest"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-development-report/v1" },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "terminal": { "enum": ["development-pass", "stop-disabled"] },
+    "failureCode": { "enum": ["invalid_run", "threshold", "runtime"] },
+    "opencodeVersion": { "const": "1.18.10" },
+    "model": { "const": "opencode-go/deepseek-v4-flash" },
+    "variant": { "const": "max" },
+    "candidateManifestHash": { "$ref": "#/$defs/digest" },
+    "hashes": { "$ref": "#/$defs/hashes" },
+    "sourceManifest": { "$ref": "#/$defs/sourceManifest" },
+    "contract": { "$ref": "#/$defs/contract" },
+    "development": { "$ref": "#/$defs/development" },
+    "faults": { "$ref": "#/$defs/faults" },
+    "aggregateDigest": { "$ref": "#/$defs/digest" }
+  },
+  "allOf": [
+    { "if": { "properties": { "terminal": { "const": "development-pass" } } }, "then": { "not": { "required": ["failureCode"] } } },
+    { "if": { "properties": { "terminal": { "const": "stop-disabled" } } }, "then": { "required": ["failureCode"] } }
+  ],
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpusHash", "developmentCorpusHash", "schemaHash", "promptHash", "policyHash", "evaluatorHash", "coreHash", "routeMatrixHash", "runtimeBinaryHash"],
+      "properties": {
+        "corpusHash": { "$ref": "#/$defs/digest" },
+        "developmentCorpusHash": { "$ref": "#/$defs/digest" },
+        "schemaHash": { "$ref": "#/$defs/digest" },
+        "promptHash": { "$ref": "#/$defs/digest" },
+        "policyHash": { "$ref": "#/$defs/digest" },
+        "evaluatorHash": { "$ref": "#/$defs/digest" },
+        "coreHash": { "$ref": "#/$defs/digest" },
+        "routeMatrixHash": { "$ref": "#/$defs/digest" },
+        "runtimeBinaryHash": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "sourceManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "binding", "immutableModelRevisionAttested", "servedVariantAttested", "files", "parameters", "manifestHash"],
+      "properties": {
+        "schemaVersion": { "const": "qualification-source-manifest/v1" },
+        "binding": { "const": "staleness-only" },
+        "immutableModelRevisionAttested": { "const": false },
+        "servedVariantAttested": { "const": false },
+        "files": { "type": "object", "additionalProperties": { "$ref": "#/$defs/digest" } },
+        "parameters": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },
+        "manifestHash": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "requestedAlias", "requestedVariant", "temperature", "repeats", "timeoutMs", "retryCount", "contractHash"],
+      "properties": {
+        "version": { "const": "classifier-qualification/v3" },
+        "requestedAlias": { "const": "opencode-go/deepseek-v4-flash" },
+        "requestedVariant": { "const": "max" },
+        "temperature": { "const": 0 },
+        "repeats": { "const": 5 },
+        "timeoutMs": { "const": 30000 },
+        "retryCount": { "const": 0 },
+        "contractHash": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "categoryCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benign", "dangerous", "ambiguous", "injection", "secret", "obfuscated"],
+      "properties": {
+        "benign": { "type": "integer", "minimum": 0 },
+        "dangerous": { "type": "integer", "minimum": 0 },
+        "ambiguous": { "type": "integer", "minimum": 0 },
+        "injection": { "type": "integer", "minimum": 0 },
+        "secret": { "type": "integer", "minimum": 0 },
+        "obfuscated": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "confusionRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow", "manual"],
+      "properties": { "allow": { "type": "integer", "minimum": 0 }, "manual": { "type": "integer", "minimum": 0 } }
+    },
+    "confusionMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benign", "dangerous", "ambiguous", "injection", "secret", "obfuscated"],
+      "properties": {
+        "benign": { "$ref": "#/$defs/confusionRow" },
+        "dangerous": { "$ref": "#/$defs/confusionRow" },
+        "ambiguous": { "$ref": "#/$defs/confusionRow" },
+        "injection": { "$ref": "#/$defs/confusionRow" },
+        "secret": { "$ref": "#/$defs/confusionRow" },
+        "obfuscated": { "$ref": "#/$defs/confusionRow" }
+      }
+    },
+    "development": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpus", "version", "fixtureCount", "repeats", "temperature", "timeoutMs", "executionMode", "providerCalls", "invocations", "classifierDenominator", "invalidRunCount", "capacityObservationCount", "categoryCounts", "confusionMatrix", "criticalFalseApprovalCount", "canaryLeakCount", "errorPathTotal", "errorPathManual", "errorPathNonManual", "errorPathManualRate", "errorPathManualNumerator", "errorPathManualDenominator", "benignFalseManualNumerator", "benignFalseManualDenominator", "benignFalseManualLimit", "criticalDisagreements", "ambiguousDisagreements", "otherDisagreements", "disagreementDenominator", "otherDisagreementLimit", "latencyP95Ms", "maxLatencyMs", "allInvocationsBeforeTimeout", "thresholdStatement"],
+      "properties": {
+        "corpus": { "const": "development" }, "version": { "type": "string", "minLength": 1 }, "fixtureCount": { "type": "integer", "minimum": 0 }, "repeats": { "const": 5 }, "temperature": { "const": 0 }, "timeoutMs": { "const": 30000 }, "executionMode": { "const": "live" }, "providerCalls": { "type": "integer", "minimum": 0 }, "invocations": { "type": "integer", "minimum": 0 }, "classifierDenominator": { "type": "integer", "minimum": 0 }, "invalidRunCount": { "type": "integer", "minimum": 0 }, "capacityObservationCount": { "type": "integer", "minimum": 0 },
+        "categoryCounts": { "$ref": "#/$defs/categoryCounts" }, "confusionMatrix": { "$ref": "#/$defs/confusionMatrix" }, "criticalFalseApprovalCount": { "type": "integer", "minimum": 0 }, "canaryLeakCount": { "type": "integer", "minimum": 0 }, "errorPathTotal": { "type": "integer", "minimum": 0 }, "errorPathManual": { "type": "integer", "minimum": 0 }, "errorPathNonManual": { "type": "integer", "minimum": 0 }, "errorPathManualRate": { "type": "number", "minimum": 0, "maximum": 1 }, "errorPathManualNumerator": { "type": "integer", "minimum": 0 }, "errorPathManualDenominator": { "type": "integer", "minimum": 0 }, "benignFalseManualNumerator": { "type": "integer", "minimum": 0 }, "benignFalseManualDenominator": { "type": "integer", "minimum": 0 }, "benignFalseManualLimit": { "type": "integer", "minimum": 0 }, "criticalDisagreements": { "type": "integer", "minimum": 0 }, "ambiguousDisagreements": { "type": "integer", "minimum": 0 }, "otherDisagreements": { "type": "integer", "minimum": 0 }, "disagreementDenominator": { "type": "integer", "minimum": 0 }, "otherDisagreementLimit": { "type": "integer", "minimum": 0 }, "latencyP95Ms": { "type": "number", "minimum": 0 }, "maxLatencyMs": { "type": "number", "minimum": 0 }, "allInvocationsBeforeTimeout": { "type": "boolean" }, "thresholdStatement": { "type": "string", "minLength": 1 }
+      }
+    },
+    "faults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "generatedAt", "executionMode", "invalidRunCount", "classifierDenominator", "boundaryCounts", "latencyP95Ms", "observationCount"],
+      "properties": {
+        "schemaVersion": { "const": "classifier-qualification-faults/v1" }, "generatedAt": { "type": "string", "minLength": 1 }, "executionMode": { "const": "synthetic" }, "invalidRunCount": { "type": "integer", "minimum": 0 }, "classifierDenominator": { "const": 0 }, "boundaryCounts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }, "latencyP95Ms": { "type": "number", "minimum": 0 }, "observationCount": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

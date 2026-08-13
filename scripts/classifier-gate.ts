@@ -33,9 +33,11 @@ import {
   validateQualificationRecord,
   type Corpus,
   type CorpusBundle,
+  type CorpusReport,
   type Decision,
   type EvaluationHashes,
   type Fixture,
+  type FaultReport,
   type QualificationArtifactV3,
   type QualificationRecord,
   type QualificationReport,
@@ -52,6 +54,7 @@ export type RecordedInvocation = QualificationRecord;
 export const CANDIDATE_SCHEMA_VERSION = "classifier-candidate/v1" as const;
 export const UNATTESTED_PROVIDER_REVISION = "unavailable" as const;
 export const UNATTESTED_SERVED_VARIANT = "unavailable" as const;
+export const DEVELOPMENT_REPORT_SCHEMA_VERSION = "classifier-development-report/v1" as const;
 
 export interface FrozenCandidateManifest {
   readonly schemaVersion: typeof CANDIDATE_SCHEMA_VERSION;
@@ -79,11 +82,46 @@ export interface FrozenCandidateManifest {
   readonly manifestHash: string;
 }
 
+export type DevelopmentTerminal = "development-pass" | "stop-disabled";
+export type DevelopmentFailureCode = "invalid_run" | "threshold" | "runtime";
+export type DevelopmentAggregate = Omit<CorpusReport, "records" | "observationIDs">;
+export type DevelopmentFaultAggregate = Omit<FaultReport, "observations" | "observationIDs" | "sharedObservationIDs"> & {
+  readonly observationCount: number;
+};
+
+/** A public development result. It intentionally contains no per-observation arrays or identifiers. */
+export interface DevelopmentCandidateReport {
+  readonly schemaVersion: typeof DEVELOPMENT_REPORT_SCHEMA_VERSION;
+  readonly generatedAt: string;
+  readonly terminal: DevelopmentTerminal;
+  readonly failureCode?: DevelopmentFailureCode;
+  readonly opencodeVersion: typeof REQUIRED_OPENCODE_VERSION;
+  readonly model: typeof QUALIFICATION_MODEL;
+  readonly variant: typeof QUALIFICATION_VARIANT;
+  readonly candidateManifestHash: string;
+  readonly hashes: EvaluationHashes;
+  readonly sourceManifest: EvaluationSourceManifest;
+  readonly contract: {
+    readonly version: typeof QUALIFICATION_SCHEMA_VERSION;
+    readonly requestedAlias: typeof QUALIFICATION_MODEL;
+    readonly requestedVariant: typeof QUALIFICATION_VARIANT;
+    readonly temperature: typeof TEMPERATURE;
+    readonly repeats: typeof REPEAT_COUNT;
+    readonly timeoutMs: typeof REVIEW_TIMEOUT_MS;
+    readonly retryCount: 0;
+    readonly contractHash: string;
+  };
+  readonly development: DevelopmentAggregate;
+  readonly faults: DevelopmentFaultAggregate;
+  readonly aggregateDigest: string;
+}
+
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEVELOPMENT_CORPUS_PATH = resolve(PROJECT_ROOT, "fixtures/eval/development.json");
 const LEGACY_COMBINED_CORPUS_PATH = resolve(PROJECT_ROOT, "fixtures/eval/corpus.json");
 const ARTIFACT_PATH = resolve(PROJECT_ROOT, "eval-results/classifier-qualification.json");
-const FAILURE_ARTIFACT_PATH = resolve(PROJECT_ROOT, "eval-results/classifier-qualification.failed.json");
+export const FROZEN_CANDIDATE_PATH = resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json");
+export const DEVELOPMENT_REPORT_PATH = resolve(PROJECT_ROOT, "eval-results/development-candidate-report.json");
 const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
 const QUALIFICATION_CONFIG = JSON.stringify({
   model: QUALIFICATION_MODEL,
@@ -190,13 +228,18 @@ const SOURCE_MANIFEST_FILES = [
   "scripts/classifier-gate.ts",
   "scripts/qualification/core.ts",
   "scripts/qualification/custody.ts",
+  "scripts/qualification/verify-terminal.ts",
   "fixtures/eval/development.json",
   "fixtures/eval/authoring-rubric.md",
   "fixtures/eval/qualification-artifact-v3.schema.json",
   "fixtures/eval/qualification-fault-report.schema.json",
+  "fixtures/eval/development-candidate-report.schema.json",
   "fixtures/eval/frozen-candidate-manifest.schema.json",
   "fixtures/eval/release-manifest.schema.json",
   "fixtures/eval/release-attestation.schema.json",
+  "fixtures/eval/qualification-preflight.schema.json",
+  "fixtures/eval/terminal-custody-manifest.schema.json",
+  "fixtures/eval/terminal-attestation.schema.json",
   "package.json",
 ] as const;
 
@@ -279,6 +322,132 @@ export function validateFrozenCandidateManifest(value: unknown): FrozenCandidate
   return value as unknown as FrozenCandidateManifest;
 }
 
+const DEVELOPMENT_AGGREGATE_KEYS = [
+  "corpus", "version", "fixtureCount", "repeats", "temperature", "timeoutMs", "executionMode", "providerCalls", "invocations",
+  "classifierDenominator", "invalidRunCount", "capacityObservationCount", "categoryCounts", "confusionMatrix",
+  "criticalFalseApprovalCount", "canaryLeakCount", "errorPathTotal", "errorPathManual", "errorPathNonManual", "errorPathManualRate",
+  "errorPathManualNumerator", "errorPathManualDenominator", "benignFalseManualNumerator", "benignFalseManualDenominator",
+  "benignFalseManualLimit", "criticalDisagreements", "ambiguousDisagreements", "otherDisagreements", "disagreementDenominator",
+  "otherDisagreementLimit", "latencyP95Ms", "maxLatencyMs", "allInvocationsBeforeTimeout", "thresholdStatement",
+] as const;
+const DEVELOPMENT_FAULT_KEYS = ["schemaVersion", "generatedAt", "executionMode", "invalidRunCount", "classifierDenominator", "boundaryCounts", "latencyP95Ms", "observationCount"] as const;
+const DEVELOPMENT_REPORT_KEYS = [
+  "schemaVersion", "generatedAt", "terminal", "failureCode", "opencodeVersion", "model", "variant", "candidateManifestHash",
+  "hashes", "sourceManifest", "contract", "development", "faults", "aggregateDigest",
+] as const;
+const AGGREGATE_FORBIDDEN_KEY = /^(?:record|records|observation|observations|observationID|observationIDs|fixtureID|fixtureIDs|command|commands|output|prompt|providerResponse|raw|error|errors|providerProse|sharedObservationIDs)$/i;
+
+function assertExactKeys(value: Record<string, unknown>, expected: readonly string[], label: string): void {
+  const actual = Object.keys(value).sort();
+  const allowed = [...expected].sort();
+  if (actual.length !== allowed.length || actual.some((key, index) => key !== allowed[index])) throw new Error(`${label} contains unknown or missing fields`);
+}
+
+function assertAggregateOnly(value: unknown, parentKey = ""): void {
+  if (Array.isArray(value)) throw new Error(`development report contains per-observation output at ${parentKey || "root"}`);
+  if (!isRecord(value)) return;
+  for (const [key, entry] of Object.entries(value)) {
+    if (!(key === "prompt" && parentKey.endsWith("boundaryCounts")) && AGGREGATE_FORBIDDEN_KEY.test(key)) throw new Error(`development report contains forbidden field: ${parentKey ? `${parentKey}.` : ""}${key}`);
+    assertAggregateOnly(entry, parentKey ? `${parentKey}.${key}` : key);
+  }
+}
+
+function aggregateCorpusReport(report: CorpusReport): DevelopmentAggregate {
+  const { records: _records, observationIDs: _observationIDs, ...aggregate } = report;
+  return aggregate;
+}
+
+function aggregateFaultReport(report: FaultReport): DevelopmentFaultAggregate {
+  const { observations, observationIDs: _observationIDs, sharedObservationIDs: _sharedObservationIDs, ...aggregate } = report;
+  return { ...aggregate, observationCount: observations.length };
+}
+
+function developmentContract(): DevelopmentCandidateReport["contract"] {
+  return {
+    version: QUALIFICATION_SCHEMA_VERSION,
+    requestedAlias: QUALIFICATION_MODEL,
+    requestedVariant: QUALIFICATION_VARIANT,
+    temperature: TEMPERATURE,
+    repeats: REPEAT_COUNT,
+    timeoutMs: REVIEW_TIMEOUT_MS,
+    retryCount: 0,
+    contractHash: currentEvaluationHashes().promptHash,
+  };
+}
+
+function failureCodeFor(report: CorpusReport): DevelopmentFailureCode {
+  return report.invalidRunCount > 0 ? "invalid_run" : "threshold";
+}
+
+/** Build the public terminal report from the in-memory v3 aggregates only. */
+export function createDevelopmentCandidateReport(input: {
+  readonly candidate: FrozenCandidateManifest;
+  readonly corpusReport: CorpusReport;
+  readonly faults: FaultReport;
+  readonly terminal: DevelopmentTerminal;
+  readonly failureCode?: DevelopmentFailureCode;
+  readonly generatedAt?: string;
+}): DevelopmentCandidateReport {
+  const failureCode = input.terminal === "stop-disabled" ? input.failureCode ?? failureCodeFor(input.corpusReport) : undefined;
+  const development = aggregateCorpusReport(input.corpusReport);
+  const faults = aggregateFaultReport(input.faults);
+  const base = {
+    schemaVersion: DEVELOPMENT_REPORT_SCHEMA_VERSION,
+    generatedAt: input.generatedAt ?? new Date().toISOString(),
+    terminal: input.terminal,
+    ...(failureCode ? { failureCode } : {}),
+    opencodeVersion: REQUIRED_OPENCODE_VERSION,
+    model: QUALIFICATION_MODEL,
+    variant: QUALIFICATION_VARIANT,
+    candidateManifestHash: input.candidate.manifestHash,
+    hashes: currentEvaluationHashes(),
+    sourceManifest: currentEvaluationSourceManifest(),
+    contract: developmentContract(),
+    development,
+    faults,
+  } satisfies Omit<DevelopmentCandidateReport, "aggregateDigest">;
+  const report = { ...base, aggregateDigest: sha256(canonical({ terminal: base.terminal, failureCode: base.failureCode, development, faults })) } as DevelopmentCandidateReport;
+  return validateDevelopmentCandidateReport(report, input.candidate);
+}
+
+/** Validate one aggregate-only development report against the frozen candidate and checkout. */
+export function validateDevelopmentCandidateReport(value: unknown, candidate: FrozenCandidateManifest): DevelopmentCandidateReport {
+  assertAggregateOnly(value);
+  if (!isRecord(value)) throw new Error("development report is not an object");
+  assertExactKeys(value, value.failureCode === undefined ? DEVELOPMENT_REPORT_KEYS.filter((key) => key !== "failureCode") : DEVELOPMENT_REPORT_KEYS, "development report");
+  if (value.schemaVersion !== DEVELOPMENT_REPORT_SCHEMA_VERSION || typeof value.generatedAt !== "string" || (value.terminal !== "development-pass" && value.terminal !== "stop-disabled")) throw new Error("development report metadata is invalid");
+  if ((value.terminal === "development-pass" && value.failureCode !== undefined) || (value.terminal === "stop-disabled" && !["invalid_run", "threshold", "runtime"].includes(String(value.failureCode)))) throw new Error("development report terminal code is invalid");
+  if (value.opencodeVersion !== REQUIRED_OPENCODE_VERSION || value.model !== QUALIFICATION_MODEL || value.variant !== QUALIFICATION_VARIANT || value.candidateManifestHash !== candidate.manifestHash) throw new Error("development report candidate binding is stale");
+  if (!isRecord(value.hashes) || canonical(value.hashes) !== canonical(candidate.hashes) || canonical(value.hashes) !== canonical(currentEvaluationHashes())) throw new Error("development report hashes are stale");
+  if (!isRecord(value.sourceManifest) || canonical(value.sourceManifest) !== canonical(candidate.sourceManifest) || canonical(value.sourceManifest) !== canonical(currentEvaluationSourceManifest())) throw new Error("development report source manifest is stale");
+  if (!isRecord(value.contract) || canonical(value.contract) !== canonical(developmentContract())) throw new Error("development report contract is stale");
+  if (!isRecord(value.development)) throw new Error("development report aggregate is missing");
+  const development = value.development as unknown as DevelopmentAggregate;
+  assertExactKeys(value.development, DEVELOPMENT_AGGREGATE_KEYS, "development aggregate");
+  if (development.corpus !== "development" || development.executionMode !== "live" || development.repeats !== REPEAT_COUNT || development.temperature !== TEMPERATURE || development.timeoutMs !== REVIEW_TIMEOUT_MS || !Number.isInteger(development.fixtureCount) || !Number.isInteger(development.invocations) || !Number.isInteger(development.providerCalls) || !Number.isInteger(development.classifierDenominator) || !Number.isInteger(development.invalidRunCount) || development.invocations < 0 || development.providerCalls < 0 || development.invalidRunCount < 0 || development.classifierDenominator !== development.invocations - development.invalidRunCount || development.providerCalls > development.invocations) throw new Error("development aggregate arithmetic is invalid");
+  if (value.failureCode !== "runtime" && development.invocations !== development.fixtureCount * REPEAT_COUNT) throw new Error("development aggregate coverage is incomplete");
+  if (value.terminal === "development-pass" && development.invalidRunCount !== 0) throw new Error("development pass contains invalid runs");
+  if (value.terminal === "development-pass") {
+    try {
+      assertCorpusReport({ ...development, records: [], observationIDs: [] } as CorpusReport);
+    } catch {
+      throw new Error("development pass thresholds are invalid");
+    }
+  }
+  if (!isRecord(value.faults)) throw new Error("development fault aggregate is missing");
+  const faults = value.faults as unknown as DevelopmentFaultAggregate;
+  assertExactKeys(value.faults, DEVELOPMENT_FAULT_KEYS, "development fault aggregate");
+  if (faults.schemaVersion !== "classifier-qualification-faults/v1" || faults.executionMode !== "synthetic" || faults.classifierDenominator !== 0 || !Number.isInteger(faults.invalidRunCount) || !Number.isInteger(faults.observationCount) || faults.invalidRunCount !== faults.observationCount || !isRecord(faults.boundaryCounts) || Object.values(faults.boundaryCounts).some((count) => !Number.isInteger(count) || count < 0) || Object.values(faults.boundaryCounts).reduce((sum, count) => sum + Number(count), 0) !== faults.observationCount) throw new Error("development fault aggregate arithmetic is invalid");
+  if (typeof value.aggregateDigest !== "string" || value.aggregateDigest !== sha256(canonical({ terminal: value.terminal, failureCode: value.failureCode, development, faults }))) throw new Error("development aggregate digest is invalid");
+  return value as unknown as DevelopmentCandidateReport;
+}
+
+function writeDevelopmentCandidateReport(path: string, report: DevelopmentCandidateReport): void {
+  assertAggregateOnly(report);
+  mkdirSync(dirname(resolve(path)), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
 export type QualificationProgressPhase = "startup" | "development" | "release" | "teardown";
 export type QualificationProgressState = "started" | "progress" | "finished";
 
@@ -320,7 +489,7 @@ export function currentEvaluationHashes(): EvaluationHashes {
   return {
     corpusHash: developmentCorpusHash,
     developmentCorpusHash,
-    schemaHash: hashFiles(["fixtures/eval/qualification-artifact-v3.schema.json", "fixtures/eval/qualification-fault-report.schema.json"]),
+    schemaHash: hashFiles(["fixtures/eval/qualification-artifact-v3.schema.json", "fixtures/eval/qualification-fault-report.schema.json", "fixtures/eval/development-candidate-report.schema.json"]),
     promptHash: hashFiles(["src/reviewer/prompt.ts", "src/reviewer/schema.ts", "src/reviewer/contract.ts"]),
     policyHash: hashFiles(["src/policy/deterministic.ts", "src/policy/builtin-rules.ts", "src/privacy/secret-scan.ts", "src/privacy/sensitive-paths.ts"]),
     evaluatorHash: hashFiles(["scripts/classifier-gate.ts"]),
@@ -438,7 +607,7 @@ function observationID(fixture: Fixture, repeat: number): string {
   return `obs_${fixture.id}_${repeat}_${randomUUID()}`;
 }
 
-async function produceLiveQualification(path = ARTIFACT_PATH): Promise<QualificationReport> {
+async function produceLiveQualification(path: string, candidate: FrozenCandidateManifest): Promise<DevelopmentCandidateReport> {
   const qualificationProgress = createQualificationProgressReporter({
     sink: (status) => console.error(`[classifier-qualification] ${status.message}`),
   });
@@ -541,19 +710,21 @@ async function produceLiveQualification(path = ARTIFACT_PATH): Promise<Qualifica
     await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_REVIEWERS, jobs.length) }, () => worker()));
     const corpusReport = evaluateCorpus("development", corpus, records);
     const faults = evaluateFaults([]);
+    let failureCode: DevelopmentFailureCode | undefined;
     try {
       assertCorpusReport(corpusReport, corpus);
       assertFaultReport(faults, corpusReport.records.filter((record) => record.metricEligible).map((record) => record.observationID));
-    } catch (error) {
-      mkdirSync(dirname(FAILURE_ARTIFACT_PATH), { recursive: true });
-      writeFileSync(FAILURE_ARTIFACT_PATH, `${JSON.stringify({ schemaVersion: "classifier-qualification-failure/v3", generatedAt: new Date().toISOString(), opencodeVersion: REQUIRED_OPENCODE_VERSION, model: QUALIFICATION_MODEL, variant: QUALIFICATION_VARIANT, hashes: currentEvaluationHashes(), reports: [corpusReport], faults }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-      throw error;
+    } catch {
+      failureCode = failureCodeFor(corpusReport);
     }
-    const report: QualificationReport = { schemaVersion: QUALIFICATION_SCHEMA_VERSION, generatedAt: new Date().toISOString(), executionMode: "live", opencodeVersion: REQUIRED_OPENCODE_VERSION, model: QUALIFICATION_MODEL, variant: QUALIFICATION_VARIANT, hashes: currentEvaluationHashes(), sourceManifest: currentEvaluationSourceManifest(), reports: [corpusReport], faults, corpusErrors: [] };
-    validateQualificationArtifact(report, corpus);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    rmSync(FAILURE_ARTIFACT_PATH, { force: true });
+    const report = createDevelopmentCandidateReport({
+      candidate,
+      corpusReport,
+      faults,
+      terminal: failureCode ? "stop-disabled" : "development-pass",
+      ...(failureCode ? { failureCode } : {}),
+    });
+    writeDevelopmentCandidateReport(path, report);
     return report;
   } finally {
     clearInterval(progress);
@@ -567,8 +738,29 @@ async function produceLiveQualification(path = ARTIFACT_PATH): Promise<Qualifica
   }
 }
 
+function readFrozenCandidateManifest(path = FROZEN_CANDIDATE_PATH): FrozenCandidateManifest {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    throw new Error(`frozen candidate manifest missing or unreadable: ${path}`);
+  }
+  return validateFrozenCandidateManifest(value);
+}
+
+function createRuntimeFailureReport(candidate: FrozenCandidateManifest): DevelopmentCandidateReport {
+  const corpus = loadDevelopmentCorpus().corpus;
+  return createDevelopmentCandidateReport({
+    candidate,
+    corpusReport: evaluateCorpus("development", corpus, [], "live"),
+    faults: evaluateFaults([]),
+    terminal: "stop-disabled",
+    failureCode: "runtime",
+  });
+}
+
 const RELEASE_INPUT_OPTIONS = new Set(["--heldout", "--heldout-corpus", "--release", "--release-corpus", "--private", "--private-corpus", "--combined", "--combined-corpus", "--bundle", "--corpus", "--release-input", "--live-release"]);
-const VALUE_OPTIONS = new Set(["--artifact", "--freeze-candidate", "--validate-candidate"]);
+const VALUE_OPTIONS = new Set(["--artifact", "--candidate", "--freeze-candidate", "--validate-candidate", "--validate-development-report"]);
 
 export function validateDevelopmentArguments(argv: readonly string[]): void {
   for (const [index, argument] of argv.entries()) {
@@ -580,6 +772,8 @@ export function validateDevelopmentArguments(argv: readonly string[]): void {
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
+  let liveCandidate: FrozenCandidateManifest | undefined;
+  let liveReportPath: string | undefined;
   try {
     // Parse and reject release-input options before opening any corpus or artifact.
     validateDevelopmentArguments(argv);
@@ -602,13 +796,48 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       }
       return 0;
     }
+    const candidateIndex = argv.indexOf("--candidate");
+    const candidatePath = candidateIndex >= 0 ? argv[candidateIndex + 1] : FROZEN_CANDIDATE_PATH;
+    if (candidateIndex >= 0 && (!candidatePath || candidatePath.startsWith("--"))) throw new Error("--candidate requires a frozen candidate manifest path");
+    const validateDevelopmentReportIndex = argv.indexOf("--validate-development-report");
+    if (validateDevelopmentReportIndex >= 0) {
+      const reportPath = argv[validateDevelopmentReportIndex + 1];
+      if (!reportPath || reportPath.startsWith("--")) throw new Error("--validate-development-report requires a report path");
+      const candidate = readFrozenCandidateManifest(candidatePath);
+      let value: unknown;
+      try {
+        value = JSON.parse(readFileSync(reportPath, "utf8"));
+      } catch {
+        throw new Error(`development report missing or unreadable: ${reportPath}`);
+      }
+      const report = validateDevelopmentCandidateReport(value, candidate);
+      console.log(JSON.stringify({ report: reportPath, status: report.terminal, candidateManifestHash: report.candidateManifestHash, providerCalls: report.development.providerCalls, classifierDenominator: report.development.classifierDenominator }));
+      return 0;
+    }
     const artifactIndex = argv.indexOf("--artifact");
     const artifactPath = artifactIndex >= 0 ? argv[artifactIndex + 1] : undefined;
     if (artifactIndex >= 0 && (!artifactPath || artifactPath.startsWith("--"))) throw new Error("--artifact requires a development artifact path");
-    const report = argv.includes("--live") ? await produceLiveQualification(artifactPath ?? ARTIFACT_PATH) : loadAndValidateQualificationArtifact(artifactPath ?? ARTIFACT_PATH);
+    if (argv.includes("--live")) {
+      liveCandidate = readFrozenCandidateManifest(candidatePath);
+      liveReportPath = artifactPath ?? DEVELOPMENT_REPORT_PATH;
+      const report = await produceLiveQualification(liveReportPath, liveCandidate);
+      console.log(JSON.stringify({ artifact: liveReportPath, generatedAt: report.generatedAt, status: report.terminal, providerCalls: report.development.providerCalls, classifierDenominator: report.development.classifierDenominator }));
+      return 0;
+    }
+    const report = loadAndValidateQualificationArtifact(artifactPath ?? ARTIFACT_PATH);
     console.log(JSON.stringify({ artifact: artifactPath ?? ARTIFACT_PATH, generatedAt: report.generatedAt, providerCalls: report.reports.reduce((sum, item) => sum + item.providerCalls, 0), classifierDenominator: report.reports.reduce((sum, item) => sum + item.classifierDenominator, 0) }));
     return 0;
   } catch (error) {
+    if (argv.includes("--live") && liveCandidate && liveReportPath) {
+      try {
+        const report = createRuntimeFailureReport(liveCandidate);
+        writeDevelopmentCandidateReport(liveReportPath, report);
+        console.error("classifier gate stopped disabled: runtime failure");
+        return 0;
+      } catch {
+        // Preserve the original fail-closed error when even the terminal receipt cannot be written.
+      }
+    }
     console.error(error instanceof Error ? error.message : "classifier gate failed");
     return 1;
   }

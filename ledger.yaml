@@ -12,8 +12,12 @@ invariants:
       observed_error_selector: tests/eval/classifier-gate.test.ts
       mandatory_fault_selector: tests/eval/classifier-gate.test.ts
       custody: tests/eval/qualification-custody.test.ts
+      terminal: tests/eval/qualification-terminal.test.ts
+      parity_and_candidate_canary: tests/eval/reviewer-contract-parity.test.ts
       source_manifest: tests/eval/classifier-gate.test.ts
       runner: package.json:test:offline
+      exact_runtime: package.json:test:e2e
+      release_checkpoint: eval-results/qualification-release-gate.md
   INV-8:
     gate_test_status: covered
     requirement: REQ-014

@@ -24,8 +24,10 @@ import {
   assertFaultReport,
   assertRouteProviderPair,
   assertThresholdConfiguration,
+  canonical,
   currentEvaluationHashes,
   currentEvaluationSourceManifest,
+  createDevelopmentCandidateReport,
   createFrozenCandidateManifest,
   createFaultObservation,
   evaluateCorpus,
@@ -36,10 +38,12 @@ import {
   loadDevelopmentCorpus,
   main,
   resetCorpusReadCounters,
+  sha256,
   digestPrivateBytes,
   createSignedConsumptionCommitment,
   validateReleaseStreamCommitment,
   validateDevelopmentArguments,
+  validateDevelopmentCandidateReport,
   validateFrozenCandidateManifest,
   validateQualificationArtifact,
   validateQualificationRecord,
@@ -160,6 +164,48 @@ describe("classifier qualification v3", () => {
     try {
       expect(await main(["--freeze-candidate", path])).toBe(0);
       expect(await main(["--validate-candidate", path])).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("writes an aggregate-only terminal report with A/B-equivalent totals", async () => {
+    const { corpus, report } = development();
+    const candidate = createFrozenCandidateManifest("2026-08-13T00:00:00.000Z");
+    const pass = createDevelopmentCandidateReport({ candidate, corpusReport: report, faults: evaluateFaults([]), terminal: "development-pass", generatedAt: "2026-08-13T00:01:00.000Z" });
+    expect(validateDevelopmentCandidateReport(pass, candidate)).toEqual(pass);
+    const { records: _records, observationIDs: _observationIDs, ...aggregate } = report;
+    expect(pass.development).toEqual(aggregate);
+    expect(JSON.stringify(pass)).not.toMatch(/"(?:records?|observations?|fixtureIDs?|observationIDs?|commands?|providerResponse|raw|errors?)"/i);
+    const tamperedThreshold = structuredClone(pass) as any;
+    tamperedThreshold.development.criticalFalseApprovalCount = 1;
+    tamperedThreshold.aggregateDigest = sha256(canonical({ terminal: tamperedThreshold.terminal, failureCode: tamperedThreshold.failureCode, development: tamperedThreshold.development, faults: tamperedThreshold.faults }));
+    expect(() => validateDevelopmentCandidateReport(tamperedThreshold, candidate)).toThrow(/thresholds/);
+    const arrays: unknown[] = [];
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) arrays.push(value);
+      else if (value && typeof value === "object") for (const entry of Object.values(value)) walk(entry);
+    };
+    walk(pass);
+    expect(arrays).toHaveLength(0);
+
+    const invalidRecords = explicitRecords(corpus);
+    invalidRecords[0] = recordFor(corpus.fixtures[0]!, 1, { route: "reviewer", providerAttempted: true, decision: "manual", reasonCodes: ["uncertain"], schemaValid: false, metricEligible: false, outcome: "invalid_run", terminalKind: "manual" });
+    const invalid = evaluateCorpus("development", corpus, invalidRecords);
+    const stopped = createDevelopmentCandidateReport({ candidate, corpusReport: invalid, faults: evaluateFaults([]), terminal: "stop-disabled", failureCode: "invalid_run", generatedAt: "2026-08-13T00:02:00.000Z" });
+    expect(stopped.failureCode).toBe("invalid_run");
+    expect(stopped.development.invalidRunCount).toBe(1);
+    expect(stopped.development.classifierDenominator).toBe(stopped.development.invocations - 1);
+    expect(validateDevelopmentCandidateReport(stopped, candidate)).toEqual(stopped);
+    expect(() => validateDevelopmentCandidateReport({ ...stopped, records: [] }, candidate)).toThrow(/per-observation|forbidden|unknown/);
+
+    const root = mkdtempSync(join(tmpdir(), "development-report-"));
+    const candidatePath = join(root, "candidate.json");
+    const reportPath = join(root, "development-candidate-report.json");
+    try {
+      writeFileSync(candidatePath, `${JSON.stringify(candidate)}\n`);
+      writeFileSync(reportPath, `${JSON.stringify(stopped)}\n`);
+      expect(await main(["--validate-development-report", reportPath, "--candidate", candidatePath])).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

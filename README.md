@@ -28,10 +28,13 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 - `INVARIANTS.md` defines contracts every future change must preserve.
 - `ledger.yaml` records invariant gate coverage.
 
-The MVP implementation is present, but the model qualification gate failed. The
-plugin remains fail-closed with model-backed automatic approval disabled by an
-immutable release gate. The failed report is retained locally under the
-gitignored `eval-results/` directory; it is not qualification evidence.
+The MVP implementation is present. The current source-current development
+candidate passed its aggregate gate, but the private release branch has not
+been created because no fresh private corpus, independent adjudicator, or
+human custodian is present. The plugin remains fail-closed with model-backed
+automatic approval disabled by an immutable release gate. Historical failed
+reports remain locally under the gitignored `eval-results/` directory and are
+not current qualification evidence.
 
 The six identity-specific replan micro-plans are static, disabled-default
 guidance for blocked shell attempts; their presence is not qualification
@@ -60,7 +63,8 @@ global OpenCode plugin loader for evaluation; keep native `bash: ask` enabled.
 `model.enabled=true` cannot enable automatic approvals in this release. Remove the
 loader entry to restore stock OpenCode; no session-data edit is required. OpenCode
 1.18.10 is the tested compatibility target, not a model qualification. DeepSeek V4
-Flash remains a candidate reviewer until every qualification threshold passes.
+Flash remains a candidate reviewer until the attended private release branch and
+human custody attestation pass.
 
 ## Development verification
 
@@ -68,9 +72,13 @@ The disposable OpenCode checks use the pinned local `opencode-ai@1.18.10` binary
 by default. They isolate config, data, state, and cache under a temporary root and
 fail closed when an explicit `OPENCODE_BIN` reports any other version. Run the
 offline checks with `bun run check`; run the attended exact-runtime checks with
-`bun run test:e2e`. The separate attended `bun run qualify:live` command produces
-qualification evidence but cannot enable approval unless every locked gate passes.
+`bun run test:e2e`. The separate attended `bun run qualify:development` command
+produces the source-current aggregate development report but cannot enable
+approval. Private release evaluation requires the separate human-custodian
+workflow and is not run by the development command.
 These checks do not install the plugin globally or enable model-backed approval.
+The attended command requires `OPENCODE_AUTH_PATH` to point to the existing
+OpenCode auth file; pass the path only, never credential contents.
 
 The active evaluator reads only `fixtures/eval/development.json`; the historical
 combined corpus is diagnostic-only. v3 artifacts bind source, configuration,
@@ -90,6 +98,11 @@ production registration and reviewer payload with the evaluation contract,
 exercises negative controls, and compiles a disposable one-lock candidate
 without changing this checkout. It is contract evidence only; it does not
 qualify or enable model-backed approval.
+
+The current release checkpoint is recorded in
+`eval-results/qualification-release-gate.md`. The development result is an
+aggregate pass; release remains disabled because the fresh private corpus,
+independent labels, custodian receipt, and countersignature are absent.
 
 ## Verified OpenCode boundary
 
