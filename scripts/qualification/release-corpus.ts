@@ -1,4 +1,7 @@
 import { createPublicKey, sign, verify, type KeyObject } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CATEGORIES,
   MINIMUMS,
@@ -161,6 +164,11 @@ export interface ParseReleaseCorpusOptions {
 const DIGEST = /^[0-9a-f]{64}$/;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const RELEASE_FIXTURE_MINIMUM = CATEGORIES.reduce((sum, category) => sum + MINIMUMS[category], 0);
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+function releaseRubricDigest(): Digest {
+  return digestPrivateBytes(readFileSync(resolve(PROJECT_ROOT, RELEASE_RUBRIC_BINDING)));
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -534,7 +542,7 @@ export function toPublicReleaseManifest(value: unknown, options: ParseReleaseCor
     corpusVersion: corpus.corpusVersion,
     corpusDigest: releaseCorpusDigest(corpus, options),
     candidateManifestHash: corpus.bindings.candidateManifestHash,
-    rubricHash: digestPrivateBytes(RELEASE_RUBRIC_BINDING),
+    rubricHash: releaseRubricDigest(),
     fixtureCount: corpus.release.length,
     categoryCounts,
     generalizationCount: corpus.generalization.length,

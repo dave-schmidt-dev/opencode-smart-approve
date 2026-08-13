@@ -11,7 +11,7 @@
   `scripts/qualification/generate-release-draft.ts`, `scripts/qualification/core.ts`,
   `src/plugin.ts`, `INVARIANTS.md`, `ledger.yaml`, `fixtures/eval/release-corpus.schema.json`.
 
-## Execution limitation (read this first)
+## Original clean-room execution limitation
 
 I could **not execute any command** in this session. Every `bash` call was either denied
 by the permission gate (`bun --version`, `bun test …` → "requires approval") or failed at
@@ -20,10 +20,11 @@ the harness sandbox layer (`ls …` → `EPERM … mkdir '/Users/.../session-env
 `bun test tests/eval/release-operator.test.ts tests/eval/release-corpus.test.ts`
 and to grep for callers hit the same approval gate and could not run either.
 
-Consequence: **the test suite was not run.** The task instruction "run your own focused
-tests; do not trust the existing test claims" could not be satisfied. All verdicts below
-are by reading of source + tests, not by execution. Treat the pass/fail of the suite as
-**unverified** until run in an environment where `bun test` is permitted.
+At the time of this clean-room review, the task instruction "run your own focused tests;
+do not trust the existing test claims" could not be satisfied. The verdicts in the
+original review section below were therefore by reading of source + tests, not by
+execution. The limitation was later resolved; the follow-up execution section records
+the actual repository validation. It does not describe the current test status.
 
 ---
 

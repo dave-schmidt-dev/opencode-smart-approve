@@ -206,6 +206,79 @@ describe("one-use qualification custody", () => {
     }
   });
 
+  test("opening private input emits bounded heartbeats until it finishes", async () => {
+    const directory = root();
+    jest.useFakeTimers();
+    try {
+      const ledgerPath = join(directory, "ledger.json");
+      const signed = commitment();
+      initializeCustodyLedger(ledgerPath);
+      const statuses: string[] = [];
+      let finishInput: ((input: string) => void) | undefined;
+      const pendingInput = new Promise<string>((resolve) => { finishInput = resolve; });
+      const operation = runAttendedRelease({
+        ledgerPath,
+        commitment: signed,
+        qualificationHeartbeatMs: 5,
+        onStatus: (status) => statuses.push(status),
+        readPrivateInput: async () => pendingInput,
+        qualify: async () => publicAggregate(),
+      });
+      await Promise.resolve();
+      jest.advanceTimersByTime(15);
+      expect(statuses.filter((status) => status === "opening_private_input").length).toBe(4);
+      finishInput?.("synthetic-private-stream");
+      await operation;
+      expect(statuses.at(-1)).toBe("writing_public_result");
+    } finally {
+      jest.useRealTimers();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("status observer failures cannot abort a spent release", async () => {
+    const directory = root();
+    try {
+      const ledgerPath = join(directory, "ledger.json");
+      initializeCustodyLedger(ledgerPath);
+      const result = await runAttendedRelease({
+        ledgerPath,
+        commitment: commitment(),
+        onStatus: () => { throw new Error("synthetic status sink failure"); },
+        readPrivateInput: async () => "synthetic-private-stream",
+        qualify: async () => publicAggregate(),
+      });
+      expect(result.ledger.state).toBe("spent");
+      expect(readCustodyLedger(ledgerPath).state).toBe("spent");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("async status observer failures cannot escape a spent release", async () => {
+    const directory = root();
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const ledgerPath = join(directory, "ledger.json");
+      initializeCustodyLedger(ledgerPath);
+      const result = await runAttendedRelease({
+        ledgerPath,
+        commitment: commitment(),
+        onStatus: async () => { throw new Error("synthetic async status sink failure"); },
+        readPrivateInput: async () => "synthetic-private-stream",
+        qualify: async () => publicAggregate(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(result.ledger.state).toBe("spent");
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("qualifying heartbeat is cleared when qualification rejects", async () => {
     const directory = root();
     jest.useFakeTimers();

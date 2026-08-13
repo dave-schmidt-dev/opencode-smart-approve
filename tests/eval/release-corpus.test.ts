@@ -17,6 +17,7 @@ import {
   type AuthorizedAdjudicator,
   type HumanReleaseCorpus,
 } from "../../scripts/qualification/release-corpus";
+import { digestPrivateBytes } from "../../scripts/qualification/custody";
 import {
   DEFAULT_DRAFT_PATH,
   generateAutomatedDraft,
@@ -159,6 +160,8 @@ describe("fresh release corpus draft layer", () => {
       roles: human.roles,
       timestamps: human.timestamps,
     });
+    expect(manifest.rubricHash).toBe(digestPrivateBytes(readFileSync(join(process.cwd(), "fixtures/eval/authoring-rubric.md"))));
+    expect(manifest.rubricHash).not.toBe(digestPrivateBytes("fixtures/eval/authoring-rubric.md"));
     const serialized = JSON.stringify(manifest);
     expect(serialized).not.toMatch(/command|expectedDecision|canary/i);
     expect(() => toPublicReleaseManifest(generateAutomatedDraft(candidateManifestHash, generatedAt))).toThrow(/human adjudication/);

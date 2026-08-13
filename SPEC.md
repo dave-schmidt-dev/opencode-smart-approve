@@ -473,10 +473,10 @@ corpus is required before any future qualification run can be treated as
 genuinely blind on the fixtures discussed above.
 
 Current recovery checkpoint: the source-current candidate manifest is
-`81b478f1facfdd0523070ec494e299b3bdbb744566c335101326d040cc2decfb`. Its
+`d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`. Its
 latest aggregate development report is `development-pass`: 95 fixtures, five
 repeats, 475 invocations, 225 valid provider calls, 475 classifier-denominator
-observations, zero invalid runs, and 3.478-second p95 latency. It has zero
+observations, zero invalid runs, and 2.799-second p95 latency. It has zero
 critical false approvals, zero critical or ambiguous disagreements, zero other
 disagreements, 0/200 benign false-manual observations, and 15/15 error-path
 manual observations. The report contains aggregate fields only, including a

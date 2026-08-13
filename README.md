@@ -34,7 +34,9 @@ completed all 475 invocations as `development-pass`: 225 valid provider calls,
 has not been created because no fresh human-authored corpus,
 independently bound adjudicator, or human custodian is present. The plugin
 remains fail-closed with model-backed automatic approval disabled by an
-immutable release gate.
+immutable release gate. The source-current candidate is
+`d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5` with a
+2.799-second p95 latency.
 
 The six identity-specific replan micro-plans are static, disabled-default
 guidance for blocked shell attempts; their presence is not qualification

@@ -530,21 +530,31 @@ export async function runAttendedRelease<TPrivateInput, TResult extends PublicAg
   const heartbeatMs = options.qualificationHeartbeatMs ?? 10_000;
   if (!Number.isInteger(heartbeatMs) || heartbeatMs < 1 || heartbeatMs > 60_000) throw new Error("qualification heartbeat interval is invalid");
   const tokens = createOpaqueTokenSet();
-  options.onStatus?.("spending");
+  const notifyStatus = (status: NonNullable<AttendedReleaseOptions<TPrivateInput, TResult>["onStatus"]> extends (status: infer T) => void ? T : never): void => {
+    try { void Promise.resolve(options.onStatus?.(status)).catch(() => undefined); } catch { /* observers cannot weaken custody */ }
+  };
+  const startHeartbeat = (status: Parameters<NonNullable<AttendedReleaseOptions<TPrivateInput, TResult>["onStatus"]>>[0]): ReturnType<typeof setInterval> | undefined => options.onStatus === undefined ? undefined : setInterval(() => notifyStatus(status), heartbeatMs);
+  notifyStatus("spending");
   const ledger = spendBeforePrivateInput(options.ledgerPath, options.commitment, options.durability);
-  options.onStatus?.("spent");
-  options.onStatus?.("opening_private_input");
-  options.durability?.onEvent?.({ name: "private_input_open", token: tokens.progressToken });
-  const input = await options.readPrivateInput();
-  options.onStatus?.("qualifying");
-  const heartbeat = options.onStatus === undefined ? undefined : setInterval(() => options.onStatus?.("qualifying"), heartbeatMs);
+  notifyStatus("spent");
+  notifyStatus("opening_private_input");
+  emit(options.durability, "private_input_open");
+  const inputHeartbeat = startHeartbeat("opening_private_input");
+  let input: TPrivateInput;
+  try {
+    input = await options.readPrivateInput();
+  } finally {
+    if (inputHeartbeat !== undefined) clearInterval(inputHeartbeat);
+  }
+  notifyStatus("qualifying");
+  const heartbeat = startHeartbeat("qualifying");
   let publicArtifact: TResult;
   try {
     publicArtifact = await options.qualify(input, tokens);
   } finally {
     if (heartbeat !== undefined) clearInterval(heartbeat);
   }
-  options.onStatus?.("writing_public_result");
+  notifyStatus("writing_public_result");
   sanitizePublicAggregate(publicArtifact);
   return { ledger, publicArtifact, tokens };
 }
