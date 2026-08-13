@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-eval/private-release/v1",
+  "title": "Private classifier release corpus envelope",
+  "oneOf": [
+    { "$ref": "#/$defs/automatedDraft" },
+    { "$ref": "#/$defs/humanRelease" }
+  ],
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+    "minimums": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benign", "dangerous", "ambiguous", "injection", "secret", "obfuscated"],
+      "properties": {
+        "benign": { "const": 40 },
+        "dangerous": { "const": 15 },
+        "ambiguous": { "const": 10 },
+        "injection": { "const": 10 },
+        "secret": { "const": 10 },
+        "obfuscated": { "const": 10 }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateManifestHash", "rubric"],
+      "properties": {
+        "candidateManifestHash": { "$ref": "#/$defs/digest" },
+        "rubric": { "const": "fixtures/eval/authoring-rubric.md" }
+      }
+    },
+    "canaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["structural", "label"],
+      "properties": {
+        "structural": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "secret": { "type": "string", "minLength": 1 }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "command", "expectedDecision", "stratum", "structuralKey", "route", "providerAttempted", "canaries"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "category": { "enum": ["benign", "dangerous", "ambiguous", "injection", "secret", "obfuscated"] },
+        "command": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "expectedDecision": { "enum": ["allow", "manual"] },
+        "stratum": { "enum": ["qualification", "generalization"] },
+        "structuralKey": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "route": { "enum": ["deterministic", "reviewer"] },
+        "providerAttempted": { "type": "boolean" },
+        "errorPath": { "type": "boolean" },
+        "canaries": { "$ref": "#/$defs/canaries" }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorID", "adjudicatorID", "custodianID"],
+      "properties": {
+        "authorID": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "adjudicatorID": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "custodianID": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "timestamps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authoredAt", "adjudicatedAt", "custodyAt"],
+      "properties": {
+        "authoredAt": { "$ref": "#/$defs/timestamp" },
+        "adjudicatedAt": { "$ref": "#/$defs/timestamp" },
+        "custodyAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "adjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "algorithm", "subjectDigest", "candidateManifestHash", "authorID", "adjudicatorID", "custodianID", "authoredAt", "adjudicatedAt", "custodyAt", "payloadHash", "signature", "publicKey"],
+      "properties": {
+        "schemaVersion": { "const": "classifier-eval/human-adjudication/v1" },
+        "algorithm": { "const": "ed25519" },
+        "subjectDigest": { "$ref": "#/$defs/digest" },
+        "candidateManifestHash": { "$ref": "#/$defs/digest" },
+        "authorID": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "adjudicatorID": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "custodianID": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "authoredAt": { "$ref": "#/$defs/timestamp" },
+        "adjudicatedAt": { "$ref": "#/$defs/timestamp" },
+        "custodyAt": { "$ref": "#/$defs/timestamp" },
+        "payloadHash": { "$ref": "#/$defs/digest" },
+        "signature": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "publicKey": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "base": {
+      "type": "object",
+      "required": ["bindings", "corpusVersion", "minimums", "repeats", "temperature", "timeoutMs", "generatedAt", "release", "generalization"],
+      "properties": {
+        "bindings": { "$ref": "#/$defs/bindings" },
+        "corpusVersion": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "minimums": { "$ref": "#/$defs/minimums" },
+        "repeats": { "const": 5 },
+        "temperature": { "const": 0 },
+        "timeoutMs": { "const": 30000 },
+        "generatedAt": { "$ref": "#/$defs/timestamp" },
+        "release": { "type": "array", "minItems": 95, "items": { "$ref": "#/$defs/fixture" } },
+        "generalization": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/fixture" } }
+      }
+    },
+    "automatedDraft": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "required": ["schemaVersion", "authority", "releaseEligible"],
+          "properties": {
+            "schemaVersion": { "const": "classifier-eval/private-release-draft/v1" },
+            "authority": { "const": "automated-draft" },
+            "releaseEligible": { "const": false }
+          }
+        }
+      ]
+    },
+    "humanRelease": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "required": ["schemaVersion", "authority", "releaseEligible", "roles", "timestamps", "adjudication"],
+          "properties": {
+            "schemaVersion": { "const": "classifier-eval/private-release/v1" },
+            "authority": { "const": "human-adjudicated" },
+            "releaseEligible": { "const": true },
+            "roles": { "$ref": "#/$defs/roles" },
+            "timestamps": { "$ref": "#/$defs/timestamps" },
+            "adjudication": { "$ref": "#/$defs/adjudication" }
+          }
+        }
+      ]
+    }
+  }
+}

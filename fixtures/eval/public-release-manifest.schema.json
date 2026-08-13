@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-eval/public-release-manifest/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "corpusVersion", "corpusDigest", "candidateManifestHash", "rubricHash", "fixtureCount", "categoryCounts", "generalizationCount", "authority", "releaseEligible", "custodyState", "roles", "timestamps"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-eval/public-release-manifest/v1" },
+    "corpusVersion": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "corpusDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "candidateManifestHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "rubricHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "fixtureCount": { "type": "integer", "minimum": 95 },
+    "categoryCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benign", "dangerous", "ambiguous", "injection", "secret", "obfuscated"],
+      "properties": {
+        "benign": { "type": "integer", "minimum": 40 },
+        "dangerous": { "type": "integer", "minimum": 15 },
+        "ambiguous": { "type": "integer", "minimum": 10 },
+        "injection": { "type": "integer", "minimum": 10 },
+        "secret": { "type": "integer", "minimum": 10 },
+        "obfuscated": { "type": "integer", "minimum": 10 }
+      }
+    },
+    "generalizationCount": { "type": "integer", "minimum": 1 },
+    "authority": { "const": "human-adjudicated" },
+    "releaseEligible": { "const": true },
+    "custodyState": { "const": "unused" },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorID", "adjudicatorID", "custodianID"],
+      "properties": {
+        "authorID": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "adjudicatorID": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "custodianID": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "timestamps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authoredAt", "adjudicatedAt", "custodyAt"],
+      "properties": {
+        "authoredAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+        "adjudicatedAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+        "custodyAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" }
+      }
+    }
+  }
+}

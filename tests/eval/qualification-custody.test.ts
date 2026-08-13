@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { join } from "node:path";
@@ -176,6 +176,69 @@ describe("one-use qualification custody", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  test("qualifying callbacks emit bounded heartbeats until they finish", async () => {
+    const directory = root();
+    jest.useFakeTimers();
+    try {
+      const ledgerPath = join(directory, "ledger.json");
+      const signed = commitment();
+      initializeCustodyLedger(ledgerPath);
+      const statuses: string[] = [];
+      let finish: (() => void) | undefined;
+      const pending = new Promise<PublicAggregateArtifact>((resolve) => { finish = () => resolve(publicAggregate()); });
+      const operation = runAttendedRelease({
+        ledgerPath,
+        commitment: signed,
+        qualificationHeartbeatMs: 5,
+        onStatus: (status) => statuses.push(status),
+        readPrivateInput: async () => "synthetic-private-stream",
+        qualify: async () => pending,
+      });
+      await Promise.resolve();
+      jest.advanceTimersByTime(15);
+      expect(statuses.filter((status) => status === "qualifying").length).toBe(4);
+      finish?.();
+      await operation;
+      expect(statuses.at(-1)).toBe("writing_public_result");
+    } finally {
+      jest.useRealTimers();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("qualifying heartbeat is cleared when qualification rejects", async () => {
+    const directory = root();
+    jest.useFakeTimers();
+    try {
+      const ledgerPath = join(directory, "ledger.json");
+      const signed = commitment();
+      initializeCustodyLedger(ledgerPath);
+      const statuses: string[] = [];
+      let fail: ((error: Error) => void) | undefined;
+      const pending = new Promise<PublicAggregateArtifact>((_, reject) => { fail = reject; });
+      const operation = runAttendedRelease({
+        ledgerPath,
+        commitment: signed,
+        qualificationHeartbeatMs: 5,
+        onStatus: (status) => statuses.push(status),
+        readPrivateInput: async () => "synthetic-private-stream",
+        qualify: async () => pending,
+      });
+      await Promise.resolve();
+      jest.advanceTimersByTime(10);
+      const heartbeatCount = statuses.filter((status) => status === "qualifying").length;
+      expect(heartbeatCount).toBe(3);
+      fail?.(new Error("synthetic qualification failure"));
+      await expect(operation).rejects.toThrow(/synthetic qualification failure/);
+      jest.advanceTimersByTime(100);
+      expect(statuses.filter((status) => status === "qualifying").length).toBe(heartbeatCount);
+      expect(readCustodyLedger(ledgerPath).state).toBe("spent");
+    } finally {
+      jest.useRealTimers();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("public pass/failure writers reject private fields and retain only aggregates", () => {
     const directory = root();
     try {
@@ -184,8 +247,11 @@ describe("one-use qualification custody", () => {
       expect(writePublicAggregate(passPath, publicAggregate(), ["SYNTHETIC_CANARY"])).toEqual(publicAggregate());
       expect(writePublicAggregate(failurePath, publicAggregate("failure"))).toMatchObject({ schemaVersion: PUBLIC_FAILURE_SCHEMA_VERSION, outcome: "failure" });
       expect(readFileSync(passPath, "utf8")).not.toContain("SYNTHETIC_CANARY");
+      expect(() => sanitizePublicAggregate({ ...publicAggregate(), faultGate: "SYNTHETIC_CANARY" } as never, ["SYNTHETIC_CANARY"])).toThrow(/forbidden private identifier/);
       expect(() => sanitizePublicAggregate({ ...publicAggregate(), records: [] } as never)).toThrow(/forbidden|per-invocation/);
       expect(() => writePublicAggregate(join(directory, "bad.json"), { ...publicAggregate(), command: "secret" } as never)).toThrow(/forbidden/);
+      expect(() => writePublicAggregate(join(directory, "unknown.json"), { ...publicAggregate(), providerOutput: "secret" } as never)).toThrow(/unknown or missing/);
+      expect(() => writePublicAggregate(passPath, publicAggregate())).toThrow(/EEXIST/);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

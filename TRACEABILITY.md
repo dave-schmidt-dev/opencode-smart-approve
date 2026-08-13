@@ -11,7 +11,7 @@ This release map is separate from the local-only task queue and history.
 | TASK-005 | REQ-008 | tests/integration/progress.test.ts; tests/e2e/opencode-contract-canary.test.ts |
 | TASK-006 | REQ-009 | tests/unit/config.test.ts; tests/unit/shell-policy.test.ts |
 | TASK-007 | REQ-010 | tests/security/audit-redaction.test.ts |
-| TASK-008 | REQ-011 | tests/eval/classifier-gate.test.ts; tests/eval/qualification-custody.test.ts; tests/eval/qualification-terminal.test.ts; tests/eval/reviewer-contract-parity.test.ts; tests/integration/progress.test.ts; tests/spec/traceability.test.ts |
+| TASK-008 | REQ-011 | tests/eval/classifier-gate.test.ts; tests/eval/qualification-custody.test.ts; tests/eval/qualification-terminal.test.ts; tests/eval/release-corpus.test.ts; tests/eval/release-operator.test.ts; tests/eval/reviewer-contract-parity.test.ts; tests/integration/progress.test.ts; tests/spec/traceability.test.ts |
 | TASK-009 | REQ-012 | tests/package/package.test.ts; tests/spec/traceability.test.ts; tests/e2e/opencode-1.18.10.test.ts |
 | TASK-010 | REQ-013 | tests/spec/traceability.test.ts |
 | TASK-011 | REQ-014 | tests/unit/config.test.ts; tests/unit/shell-policy.test.ts; tests/unit/replan-guidance.test.ts; tests/integration/replan-guard.test.ts; tests/integration/fail-closed-to-auto.test.ts; tests/integration/progress.test.ts; tests/security/audit-redaction.test.ts; tests/e2e/opencode-contract-canary.test.ts; tests/e2e/opencode-1.18.10.test.ts |
@@ -38,9 +38,14 @@ The source-current development terminal report is validated by
 invalid-run/no-retry behavior are covered by
 `tests/eval/classifier-gate.test.ts`. The failure-only no-corpus terminal branch
 is covered by `tests/eval/qualification-terminal.test.ts` and implemented in
-`scripts/qualification/verify-terminal.ts`; it was not invoked for the current
-development pass. The exact-runtime candidate lock canary and production/
-evaluation parity are covered by `tests/eval/reviewer-contract-parity.test.ts`.
+`scripts/qualification/verify-terminal.ts`; it remains available for failed
+development draws, while the current source-current draw is `development-pass`.
+Fresh draft generation, cryptographic human-envelope and
+out-of-band adjudicator-key validation, and attended custody ordering
+are covered by `tests/eval/release-corpus.test.ts` and
+`tests/eval/release-operator.test.ts`. The exact-runtime candidate lock canary
+and production/evaluation parity are covered by
+`tests/eval/reviewer-contract-parity.test.ts`.
 The release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`; it is `release-disabled` pending
 fresh private corpus authorship, independent adjudication, and human custody.

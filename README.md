@@ -28,13 +28,13 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 - `INVARIANTS.md` defines contracts every future change must preserve.
 - `ledger.yaml` records invariant gate coverage.
 
-The MVP implementation is present. The current source-current development
-candidate passed its aggregate gate, but the private release branch has not
-been created because no fresh private corpus, independent adjudicator, or
-human custodian is present. The plugin remains fail-closed with model-backed
-automatic approval disabled by an immutable release gate. Historical failed
-reports remain locally under the gitignored `eval-results/` directory and are
-not current qualification evidence.
+The MVP implementation is present. The latest source-current development draw
+completed all 475 invocations as `development-pass`: 225 valid provider calls,
+475 classifier observations, and zero invalid runs. The private release branch
+has not been created because no fresh human-authored corpus,
+independently bound adjudicator, or human custodian is present. The plugin
+remains fail-closed with model-backed automatic approval disabled by an
+immutable release gate.
 
 The six identity-specific replan micro-plans are static, disabled-default
 guidance for blocked shell attempts; their presence is not qualification
@@ -92,6 +92,19 @@ After the offline evidence phase, the native candidate boundary is explicit:
 creates the sole source-current candidate, and `--validate-candidate` checks it.
 Neither command reads the private release stream or enables model approval.
 
+The automated fresh-corpus rehearsal is deliberately non-authoritative:
+`bun run scripts/qualification/generate-release-draft.ts <candidate-manifest-hash>`
+writes a mode-600 95-fixture draft plus six generalization fixtures marked
+`releaseEligible: false`. `scripts/qualification/release-operator.ts` is the
+attended wrapper for a later human-adjudicated corpus: it requires a signed
+human attestation bound to the corpus, roles, timestamps, and candidate; checks
+the source-current development report; pins the adjudicator ID and public key
+to a custodian-supplied out-of-band binding; verifies the signed exact-byte
+digest; spends custody before opening private input; emits a qualifying
+heartbeat; rejects drafts; and writes only a strict aggregate. It requires an
+in-process qualification callback and never manufactures human roles or a
+release attestation.
+
 The coordinator-backed parity harness is an offline contract check:
 `bun test tests/eval/reviewer-contract-parity.test.ts`. It compares the
 production registration and reviewer payload with the evaluation contract,
@@ -101,8 +114,9 @@ qualify or enable model-backed approval.
 
 The current release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`. The development result is an
-aggregate pass; release remains disabled because the fresh private corpus,
-independent labels, custodian receipt, and countersignature are absent.
+aggregate `development-pass` receipt; release remains disabled because the
+fresh human corpus, independent labels, custodian receipt, and countersignature
+are absent.
 
 ## Verified OpenCode boundary
 

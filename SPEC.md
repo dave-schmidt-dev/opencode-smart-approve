@@ -1,6 +1,6 @@
 # SPEC: OpenCode Smart Approve
 
-Status: implemented MVP; qualification blocked
+Status: implemented MVP; private release qualification blocked
 PlanningTier: impulse
 Target: OpenCode 1.18.10 on macOS and Linux
 License: MIT
@@ -26,7 +26,8 @@ a qualified DeepSeek V4 Flash reviewer, and no error path turning into an automa
 approval. The current build does not meet that outcome: private release
 qualification is incomplete.
 The development branch has since been re-run against a source-current frozen
-candidate and passed; private release qualification remains incomplete.
+candidate and completed its aggregate pass; private release qualification
+remains incomplete.
 
 ## 3. Scope
 
@@ -472,21 +473,24 @@ corpus is required before any future qualification run can be treated as
 genuinely blind on the fixtures discussed above.
 
 Current recovery checkpoint: the source-current candidate manifest is
-`912f21a472125b96715f844a95c0a04fdbcb252eaa71720ff28b9dce088c4eda`. Its
-aggregate development report is `development-pass`: 95 fixtures, five repeats,
-475 invocations, 225 provider calls, zero invalid runs, zero critical false
-approvals, zero critical or ambiguous disagreements, zero other disagreements,
-0/200 benign false-manual observations, 15/15 error-path manual observations,
-and 2.299-second p95 latency. The report contains aggregate fields only and is
-validated against the candidate and current source/config hashes.
+`81b478f1facfdd0523070ec494e299b3bdbb744566c335101326d040cc2decfb`. Its
+latest aggregate development report is `development-pass`: 95 fixtures, five
+repeats, 475 invocations, 225 valid provider calls, 475 classifier-denominator
+observations, zero invalid runs, and 3.478-second p95 latency. It has zero
+critical false approvals, zero critical or ambiguous disagreements, zero other
+disagreements, 0/200 benign false-manual observations, and 15/15 error-path
+manual observations. The report contains aggregate fields only, including a
+terminal-kind histogram, and is validated against the candidate and current
+source/config hashes.
 
 The exact-runtime candidate canary, public-synthetic custody/parity suites,
 offline/package/spec gates, and OpenCode 1.18.10 integration and contract
-canaries pass. The release branch remains `release-disabled` because no fresh
-private corpus, independent adjudicator, or human custodian has been supplied;
-no private bytes were read and no custody state was created. Provider weights
-and served variant remain unattested, and `MODEL_APPROVAL_QUALIFIED` remains
-`false`.
+canaries pass. The failure-only no-corpus terminal branch remains available for
+failed development draws; its older receipts are superseded by the current
+passing candidate. The release branch remains `release-disabled` because no
+fresh private corpus, independently bound adjudicator, or human custodian has
+been supplied; provider weights and served variant remain unattested, and
+`MODEL_APPROVAL_QUALIFIED` remains `false`.
 
 ### REQ-012: Compatibility and packaging
 

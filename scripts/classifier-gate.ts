@@ -19,6 +19,7 @@ import {
   REVIEW_TIMEOUT_MS,
   ROUTE_PROVIDER_MATRIX,
   TEMPERATURE,
+  TERMINAL_KINDS,
   THRESHOLD_STATEMENT,
   assertCorpusReport,
   assertFaultReport,
@@ -27,6 +28,7 @@ import {
   evaluateFaults,
   hashQualificationRecord,
   isReasonCode,
+  isTerminalKind,
   parseCorpus,
   parseDevelopmentFile,
   sha256,
@@ -84,7 +86,9 @@ export interface FrozenCandidateManifest {
 
 export type DevelopmentTerminal = "development-pass" | "stop-disabled";
 export type DevelopmentFailureCode = "invalid_run" | "threshold" | "runtime";
-export type DevelopmentAggregate = Omit<CorpusReport, "records" | "observationIDs">;
+export type DevelopmentAggregate = Omit<CorpusReport, "records" | "observationIDs"> & {
+  readonly terminalKindCounts: Readonly<Record<TerminalKind, number>>;
+};
 export type DevelopmentFaultAggregate = Omit<FaultReport, "observations" | "observationIDs" | "sharedObservationIDs"> & {
   readonly observationCount: number;
 };
@@ -228,6 +232,9 @@ const SOURCE_MANIFEST_FILES = [
   "scripts/classifier-gate.ts",
   "scripts/qualification/core.ts",
   "scripts/qualification/custody.ts",
+  "scripts/qualification/release-corpus.ts",
+  "scripts/qualification/generate-release-draft.ts",
+  "scripts/qualification/release-operator.ts",
   "scripts/qualification/verify-terminal.ts",
   "fixtures/eval/development.json",
   "fixtures/eval/authoring-rubric.md",
@@ -236,6 +243,8 @@ const SOURCE_MANIFEST_FILES = [
   "fixtures/eval/development-candidate-report.schema.json",
   "fixtures/eval/frozen-candidate-manifest.schema.json",
   "fixtures/eval/release-manifest.schema.json",
+  "fixtures/eval/release-corpus.schema.json",
+  "fixtures/eval/public-release-manifest.schema.json",
   "fixtures/eval/release-attestation.schema.json",
   "fixtures/eval/qualification-preflight.schema.json",
   "fixtures/eval/terminal-custody-manifest.schema.json",
@@ -329,6 +338,7 @@ const DEVELOPMENT_AGGREGATE_KEYS = [
   "errorPathManualNumerator", "errorPathManualDenominator", "benignFalseManualNumerator", "benignFalseManualDenominator",
   "benignFalseManualLimit", "criticalDisagreements", "ambiguousDisagreements", "otherDisagreements", "disagreementDenominator",
   "otherDisagreementLimit", "latencyP95Ms", "maxLatencyMs", "allInvocationsBeforeTimeout", "thresholdStatement",
+  "terminalKindCounts",
 ] as const;
 const DEVELOPMENT_FAULT_KEYS = ["schemaVersion", "generatedAt", "executionMode", "invalidRunCount", "classifierDenominator", "boundaryCounts", "latencyP95Ms", "observationCount"] as const;
 const DEVELOPMENT_REPORT_KEYS = [
@@ -354,7 +364,19 @@ function assertAggregateOnly(value: unknown, parentKey = ""): void {
 
 function aggregateCorpusReport(report: CorpusReport): DevelopmentAggregate {
   const { records: _records, observationIDs: _observationIDs, ...aggregate } = report;
-  return aggregate;
+  const terminalKindCounts = Object.fromEntries(TERMINAL_KINDS.map((kind) => [kind, 0])) as Record<TerminalKind, number>;
+  const records = (report as unknown as { readonly records?: readonly QualificationRecord[] }).records;
+  if (records !== undefined) {
+    for (const record of records) {
+      if (!isTerminalKind(record.terminalKind)) throw new Error("qualification report contains an unknown terminal kind");
+      terminalKindCounts[record.terminalKind] = (terminalKindCounts[record.terminalKind] ?? 0) + 1;
+    }
+  } else {
+    terminalKindCounts.valid_model = report.providerCalls;
+    terminalKindCounts.manual = Math.max(0, report.invocations - report.providerCalls - report.invalidRunCount);
+    terminalKindCounts.provider_error = report.invalidRunCount;
+  }
+  return { ...aggregate, terminalKindCounts };
 }
 
 function aggregateFaultReport(report: FaultReport): DevelopmentFaultAggregate {
@@ -424,6 +446,7 @@ export function validateDevelopmentCandidateReport(value: unknown, candidate: Fr
   if (!isRecord(value.development)) throw new Error("development report aggregate is missing");
   const development = value.development as unknown as DevelopmentAggregate;
   assertExactKeys(value.development, DEVELOPMENT_AGGREGATE_KEYS, "development aggregate");
+  if (!isRecord(development.terminalKindCounts) || Object.keys(development.terminalKindCounts).sort().join(",") !== [...TERMINAL_KINDS].sort().join(",") || Object.values(development.terminalKindCounts).some((count) => !Number.isInteger(count) || count < 0) || Object.values(development.terminalKindCounts).reduce((sum, count) => sum + Number(count), 0) !== development.invocations) throw new Error("development terminal-kind aggregate is invalid");
   if (development.corpus !== "development" || development.executionMode !== "live" || development.repeats !== REPEAT_COUNT || development.temperature !== TEMPERATURE || development.timeoutMs !== REVIEW_TIMEOUT_MS || !Number.isInteger(development.fixtureCount) || !Number.isInteger(development.invocations) || !Number.isInteger(development.providerCalls) || !Number.isInteger(development.classifierDenominator) || !Number.isInteger(development.invalidRunCount) || development.invocations < 0 || development.providerCalls < 0 || development.invalidRunCount < 0 || development.classifierDenominator !== development.invocations - development.invalidRunCount || development.providerCalls > development.invocations) throw new Error("development aggregate arithmetic is invalid");
   if (value.failureCode !== "runtime" && development.invocations !== development.fixtureCount * REPEAT_COUNT) throw new Error("development aggregate coverage is incomplete");
   if (value.terminal === "development-pass" && development.invalidRunCount !== 0) throw new Error("development pass contains invalid runs");

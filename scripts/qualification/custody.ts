@@ -3,6 +3,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -158,6 +159,8 @@ export interface AttendedReleaseOptions<TPrivateInput, TResult extends PublicAgg
   readonly qualify: (input: TPrivateInput, tokens: OpaqueTokenSet) => Promise<TResult>;
   readonly durability?: CustodyDurability;
   readonly onStatus?: (status: "spending" | "opening_private_input" | "qualifying" | "writing_public_result" | "spent") => void;
+  /** Testable override; production callers use the ten-second heartbeat. */
+  readonly qualificationHeartbeatMs?: number;
 }
 
 export interface AttendedReleaseResult<TResult extends PublicAggregateArtifact> {
@@ -387,6 +390,14 @@ function scanPublicFields(value: unknown, path = ""): void {
   }
 }
 
+function assertPublicAggregateKeys(value: Record<string, unknown>): void {
+  const expected = value.outcome === "pass"
+    ? ["aggregateDigest", "canaryLeakCount", "classifierDenominator", "corpusDigest", "custodyNumber", "faultGate", "invalidRunCount", "outcome", "publicToken", "schemaVersion", "verification"]
+    : ["aggregateDigest", "canaryLeakCount", "classifierDenominator", "corpusDigest", "custodyNumber", "failureCode", "faultGate", "invalidRunCount", "outcome", "publicToken", "schemaVersion", "verification"];
+  const actual = Object.keys(value).sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new Error("public aggregate contains unknown or missing fields");
+}
+
 function scanForbiddenStrings(value: unknown, forbiddenStrings: readonly string[]): void {
   if (typeof value === "string") {
     for (const forbidden of forbiddenStrings) if (forbidden.length > 0 && value.includes(forbidden)) throw new Error("public artifact contains a forbidden private identifier");
@@ -402,7 +413,9 @@ export function sanitizePublicAggregate(value: unknown, forbiddenStrings: readon
   scanForbiddenStrings(value, forbiddenStrings);
   if (!value || typeof value !== "object") throw new Error("public aggregate is not an object");
   const artifact = value as Partial<PublicAggregateArtifact>;
+  assertPublicAggregateKeys(value as Record<string, unknown>);
   if ((artifact.schemaVersion !== PUBLIC_PASS_SCHEMA_VERSION && artifact.schemaVersion !== PUBLIC_FAILURE_SCHEMA_VERSION) || artifact.verification !== PUBLIC_VERIFICATION_STATUS || (artifact.outcome !== "pass" && artifact.outcome !== "failure") || typeof artifact.publicToken !== "string" || !artifact.publicToken.startsWith("public_") || typeof artifact.corpusDigest !== "string" || typeof artifact.aggregateDigest !== "string" || typeof artifact.custodyNumber !== "number" || !Number.isSafeInteger(artifact.custodyNumber) || typeof artifact.classifierDenominator !== "number" || typeof artifact.invalidRunCount !== "number" || artifact.canaryLeakCount !== 0 || (artifact.outcome === "pass" && artifact.schemaVersion !== PUBLIC_PASS_SCHEMA_VERSION) || (artifact.outcome === "failure" && artifact.schemaVersion !== PUBLIC_FAILURE_SCHEMA_VERSION)) throw new Error("public aggregate metadata is invalid");
+  if (artifact.faultGate !== "pass" && artifact.faultGate !== "fail" || !Number.isSafeInteger(artifact.classifierDenominator) || artifact.classifierDenominator < 0 || !Number.isSafeInteger(artifact.invalidRunCount) || artifact.invalidRunCount < 0 || !Number.isSafeInteger(artifact.custodyNumber) || artifact.custodyNumber < 1) throw new Error("public aggregate arithmetic is invalid");
   assertDigest(artifact.corpusDigest, "public corpusDigest");
   assertDigest(artifact.aggregateDigest, "public aggregateDigest");
   if (artifact.outcome === "failure" && !["threshold", "fault_gate", "source_stale", "invalid_run", "custody"].includes(artifact.failureCode ?? "")) throw new Error("public failure code is invalid");
@@ -419,7 +432,10 @@ function durablePublicWrite(path: string, value: unknown): void {
     writeSync(fd, bytes, 0, bytes.length);
     fsyncSync(fd);
     closeSync(fd);
-    renameSync(temporary, absolute);
+    // Hard-linking the fsynced temporary file is atomic and fails with EEXIST;
+    // renameSync would silently replace a concurrently-created public receipt.
+    linkSync(temporary, absolute);
+    unlinkSync(temporary);
     const parent = openSync(dirname(absolute), "r");
     try { fsyncSync(parent); } finally { closeSync(parent); }
   } catch (error) {
@@ -511,6 +527,8 @@ export function publicVerificationStatus(): typeof PUBLIC_VERIFICATION_STATUS {
 }
 
 export async function runAttendedRelease<TPrivateInput, TResult extends PublicAggregateArtifact>(options: AttendedReleaseOptions<TPrivateInput, TResult>): Promise<AttendedReleaseResult<TResult>> {
+  const heartbeatMs = options.qualificationHeartbeatMs ?? 10_000;
+  if (!Number.isInteger(heartbeatMs) || heartbeatMs < 1 || heartbeatMs > 60_000) throw new Error("qualification heartbeat interval is invalid");
   const tokens = createOpaqueTokenSet();
   options.onStatus?.("spending");
   const ledger = spendBeforePrivateInput(options.ledgerPath, options.commitment, options.durability);
@@ -519,7 +537,13 @@ export async function runAttendedRelease<TPrivateInput, TResult extends PublicAg
   options.durability?.onEvent?.({ name: "private_input_open", token: tokens.progressToken });
   const input = await options.readPrivateInput();
   options.onStatus?.("qualifying");
-  const publicArtifact = await options.qualify(input, tokens);
+  const heartbeat = options.onStatus === undefined ? undefined : setInterval(() => options.onStatus?.("qualifying"), heartbeatMs);
+  let publicArtifact: TResult;
+  try {
+    publicArtifact = await options.qualify(input, tokens);
+  } finally {
+    if (heartbeat !== undefined) clearInterval(heartbeat);
+  }
   options.onStatus?.("writing_public_result");
   sanitizePublicAggregate(publicArtifact);
   return { ledger, publicArtifact, tokens };

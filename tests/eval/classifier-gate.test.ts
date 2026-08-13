@@ -18,6 +18,7 @@ import {
   REQUIRED_OPENCODE_VERSION,
   REVIEW_TIMEOUT_MS,
   ROUTE_PROVIDER_MATRIX,
+  TERMINAL_KINDS,
   TEMPERATURE,
   THRESHOLD_STATEMENT,
   assertCorpusReport,
@@ -175,7 +176,11 @@ describe("classifier qualification v3", () => {
     const pass = createDevelopmentCandidateReport({ candidate, corpusReport: report, faults: evaluateFaults([]), terminal: "development-pass", generatedAt: "2026-08-13T00:01:00.000Z" });
     expect(validateDevelopmentCandidateReport(pass, candidate)).toEqual(pass);
     const { records: _records, observationIDs: _observationIDs, ...aggregate } = report;
-    expect(pass.development).toEqual(aggregate);
+    expect(pass.development).toMatchObject(aggregate);
+    expect(Object.keys(pass.development).sort()).toEqual([...Object.keys(aggregate), "terminalKindCounts"].sort());
+    const expectedTerminalKindCounts = Object.fromEntries(TERMINAL_KINDS.map((kind) => [kind, kind === "valid_model" ? report.providerCalls : kind === "manual" ? report.invocations - report.providerCalls : 0])) as Record<TerminalKind, number>;
+    expect(pass.development.terminalKindCounts).toEqual(expectedTerminalKindCounts);
+    expect(Object.values(pass.development.terminalKindCounts).reduce((sum, count) => sum + count, 0)).toBe(report.invocations);
     expect(JSON.stringify(pass)).not.toMatch(/"(?:records?|observations?|fixtureIDs?|observationIDs?|commands?|providerResponse|raw|errors?)"/i);
     const tamperedThreshold = structuredClone(pass) as any;
     tamperedThreshold.development.criticalFalseApprovalCount = 1;

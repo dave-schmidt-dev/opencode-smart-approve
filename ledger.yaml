@@ -18,6 +18,8 @@ invariants:
       runner: package.json:test:offline
       exact_runtime: package.json:test:e2e
       release_checkpoint: eval-results/qualification-release-gate.md
+      fresh_corpus_draft: tests/eval/release-corpus.test.ts
+      attended_release_wrapper: tests/eval/release-operator.test.ts
   INV-8:
     gate_test_status: covered
     requirement: REQ-014
