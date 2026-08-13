@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-release-attestation/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "verification", "decision", "custodianID", "custodyNumber", "privateReceiptHash", "countersignature", "signedCommitmentHash", "attestationHash"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-release-attestation/v1" },
+    "verification": { "const": "not_independently_recomputable" },
+    "decision": { "enum": ["approve", "reject"] },
+    "custodianID": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "custodyNumber": { "type": "integer", "minimum": 1 },
+    "privateReceiptHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "countersignature": { "type": "string", "minLength": 1 },
+    "signedCommitmentHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "attestationHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

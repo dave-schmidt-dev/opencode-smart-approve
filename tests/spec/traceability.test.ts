@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { validateTraceability } from "../../scripts/spec-guard";
+import { REPLAN_EXECUTABLES } from "../../src/policy/executable-identity";
+import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 
 const fixture = (unmapped = false): string => {
   const root = mkdtempSync(join(tmpdir(), "smart-approve-trace-"));
@@ -89,6 +91,35 @@ describe("spec traceability", () => {
 
   test("maps the repository replan contract to INV-8 without a permission reply", () => {
     expect(replanTraceErrors(process.cwd())).toEqual([]);
+  });
+
+  test("keeps the six-executable rubric boundary and preserves other routing", async () => {
+    const spec = readFileSync(join(process.cwd(), "SPEC.md"), "utf8");
+    const rubric = readFileSync(join(process.cwd(), "fixtures/eval/authoring-rubric.md"), "utf8");
+    const accepted = await Promise.all(REPLAN_EXECUTABLES.map((executable) => evaluateDeterministicPolicy(executable, { config: { model: { enabled: true } } })));
+    expect([...REPLAN_EXECUTABLES]).toEqual(["awk", "xargs", "find", "env", "command", "cmp"]);
+    expect(accepted).toHaveLength(6);
+    expect(accepted.every((result) => result.status === "manual" && result.reasonCodes.includes("manual_executable"))).toBe(true);
+    expect(spec).toMatch(/accepts exactly `awk`,\s*`xargs`,\s*`find`,\s*`env`,\s*`command`,\s*and `cmp` as deterministic-manual identities/);
+    expect(rubric).toContain("exactly the six owner-accepted deterministic-manual");
+
+    const ordinary = await Promise.all(["echo hello", "cat README.md", "printf hello", "git status", "ls", "sed -n 1p README.md", "sort README.md", "true", "wc -c README.md"].map((command) => evaluateDeterministicPolicy(command, { config: { model: { enabled: true } } })));
+    expect(ordinary.every((result) => !result.reasonCodes.includes("manual_executable"))).toBe(true);
+  });
+
+  test("binds REQ-011 selectors and the INV-7 offline runner exactly once", () => {
+    const root = process.cwd();
+    const spec = readFileSync(join(root, "SPEC.md"), "utf8");
+    const traceability = readFileSync(join(root, "TRACEABILITY.md"), "utf8");
+    const invariants = readFileSync(join(root, "INVARIANTS.md"), "utf8");
+    const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts: { "test:offline": string } };
+    expect(spec).toMatch(/immutableModelRevisionAttested` is explicitly\s+`false`/);
+    expect(spec).toContain("servedVariantAttested` is explicitly `false`");
+    expect(spec).toContain("not_independently_recomputable");
+    expect((traceability.match(/^- Observed safety-routing selector \(100% manual\):/gm) ?? [])).toHaveLength(1);
+    expect((traceability.match(/^- Mandatory mechanical-fault selector:/gm) ?? [])).toHaveLength(1);
+    expect((invariants.match(/^\s*gate_test:\s*tests\/eval\/classifier-gate\.test\.ts$/gm) ?? [])).toHaveLength(1);
+    expect((packageJson.scripts["test:offline"].match(/tests\/eval\/classifier-gate\.test\.ts/g) ?? [])).toHaveLength(1);
   });
 
   test("rejects an empty or stale repository task queue", () => {

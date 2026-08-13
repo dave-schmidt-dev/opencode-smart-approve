@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-release-manifest/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "development", "release", "generalization", "developmentDigest", "releaseDigest"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-release-manifest/v1" },
+    "development": { "type": "array", "items": { "$ref": "#/$defs/fixture" } },
+    "release": { "type": "array", "items": { "$ref": "#/$defs/fixture" } },
+    "generalization": { "type": "array", "items": { "$ref": "#/$defs/fixture" } },
+    "developmentDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "releaseDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "$defs": {
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "expectedDecision", "stratum", "structuralKey", "route", "providerAttempted"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "category": { "enum": ["benign", "dangerous", "ambiguous", "injection", "secret", "obfuscated"] },
+        "expectedDecision": { "enum": ["allow", "manual"] },
+        "stratum": { "enum": ["qualification", "generalization"] },
+        "structuralKey": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "route": { "enum": ["deterministic", "reviewer"] },
+        "providerAttempted": { "type": "boolean" },
+        "errorPath": { "type": "boolean" }
+      }
+    }
+  }
+}

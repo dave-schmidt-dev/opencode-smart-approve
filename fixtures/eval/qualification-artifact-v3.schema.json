@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-qualification/v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "executionMode", "opencodeVersion", "model", "variant", "hashes", "sourceManifest", "reports", "faults", "corpusErrors"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-qualification/v3" },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "executionMode": { "const": "live" },
+    "opencodeVersion": { "const": "1.18.10" },
+    "model": { "const": "opencode-go/deepseek-v4-flash" },
+    "variant": { "const": "max" },
+    "hashes": { "$ref": "#/$defs/hashes" },
+    "sourceManifest": { "$ref": "#/$defs/sourceManifest" },
+    "reports": { "type": "array", "minItems": 1, "maxItems": 2, "items": { "$ref": "#/$defs/report" } },
+    "faults": { "$ref": "#/$defs/faults" },
+    "corpusErrors": { "type": "array", "maxItems": 0, "items": { "type": "string" } }
+  },
+  "$defs": {
+    "category": { "enum": ["benign", "dangerous", "ambiguous", "injection", "secret", "obfuscated"] },
+    "decision": { "enum": ["allow", "manual"] },
+    "reason": { "enum": ["safe", "ambiguous", "dangerous", "uncertain", "inconsistent", "malformed", "empty", "truncated", "timeout", "provider_error", "tool_violation", "permission_violation", "manual", "interpreter", "package_script", "unknown_binary", "dynamic_syntax", "environment_assignment", "parse_failure", "privacy", "path_identity", "model_disabled", "user_rule", "invalid_command", "replan", "manual_executable", "policy_error", "capacity_rejected", "reply_not_found", "reply_error"] },
+    "route": { "enum": ["deterministic", "reviewer"] },
+    "terminal": { "enum": ["valid_model", "manual", "malformed", "empty", "truncated", "timeout", "provider_error", "tool_violation", "permission_violation", "session_create_error", "prompt_error", "parse_error", "reply_error", "capacity_rejected"] },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observationID", "fixtureID", "category", "repeat", "expectedDecision", "decision", "route", "providerAttempted", "reasonCodes", "schemaValid", "metricEligible", "outcome", "terminalKind", "responseHash", "latencyMs"],
+      "properties": {
+        "observationID": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "fixtureID": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "category": { "$ref": "#/$defs/category" },
+        "repeat": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "expectedDecision": { "$ref": "#/$defs/decision" },
+        "decision": { "$ref": "#/$defs/decision" },
+        "route": { "$ref": "#/$defs/route" },
+        "providerAttempted": { "type": "boolean" },
+        "reasonCodes": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/reason" } },
+        "schemaValid": { "type": "boolean" },
+        "metricEligible": { "type": "boolean" },
+        "outcome": { "enum": ["classifier", "invalid_run"] },
+        "terminalKind": { "$ref": "#/$defs/terminal" },
+        "responseHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "latencyMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpus", "version", "fixtureCount", "repeats", "temperature", "timeoutMs", "executionMode", "providerCalls", "invocations", "classifierDenominator", "invalidRunCount", "capacityObservationCount", "records", "observationIDs", "categoryCounts", "confusionMatrix", "criticalFalseApprovalCount", "canaryLeakCount", "errorPathTotal", "errorPathManual", "errorPathNonManual", "errorPathManualRate", "errorPathManualNumerator", "errorPathManualDenominator", "benignFalseManualNumerator", "benignFalseManualDenominator", "benignFalseManualLimit", "criticalDisagreements", "ambiguousDisagreements", "otherDisagreements", "disagreementDenominator", "otherDisagreementLimit", "latencyP95Ms", "maxLatencyMs", "allInvocationsBeforeTimeout", "thresholdStatement"],
+      "properties": {
+        "corpus": { "enum": ["development", "heldout"] },
+        "version": { "type": "string", "minLength": 1 },
+        "fixtureCount": { "type": "integer", "minimum": 0 },
+        "repeats": { "const": 5 },
+        "temperature": { "const": 0 },
+        "timeoutMs": { "const": 30000 },
+        "executionMode": { "enum": ["live", "synthetic"] },
+        "providerCalls": { "type": "integer", "minimum": 0 },
+        "invocations": { "type": "integer", "minimum": 0 },
+        "classifierDenominator": { "type": "integer", "minimum": 0 },
+        "invalidRunCount": { "type": "integer", "minimum": 0 },
+        "capacityObservationCount": { "type": "integer", "minimum": 0 },
+        "records": { "type": "array", "items": { "$ref": "#/$defs/record" } },
+        "observationIDs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "categoryCounts": { "type": "object", "additionalProperties": false, "required": ["benign", "dangerous", "ambiguous", "injection", "secret", "obfuscated"], "properties": { "benign": { "type": "integer", "minimum": 0 }, "dangerous": { "type": "integer", "minimum": 0 }, "ambiguous": { "type": "integer", "minimum": 0 }, "injection": { "type": "integer", "minimum": 0 }, "secret": { "type": "integer", "minimum": 0 }, "obfuscated": { "type": "integer", "minimum": 0 } } },
+        "confusionMatrix": { "type": "object" },
+        "criticalFalseApprovalCount": { "type": "integer", "minimum": 0 },
+        "canaryLeakCount": { "type": "integer", "minimum": 0 },
+        "errorPathTotal": { "type": "integer", "minimum": 0 },
+        "errorPathManual": { "type": "integer", "minimum": 0 },
+        "errorPathNonManual": { "type": "integer", "minimum": 0 },
+        "errorPathManualRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "errorPathManualNumerator": { "type": "integer", "minimum": 0 },
+        "errorPathManualDenominator": { "type": "integer", "minimum": 0 },
+        "benignFalseManualNumerator": { "type": "integer", "minimum": 0 },
+        "benignFalseManualDenominator": { "type": "integer", "minimum": 0 },
+        "benignFalseManualLimit": { "type": "integer", "minimum": 0 },
+        "criticalDisagreements": { "type": "integer", "minimum": 0 },
+        "ambiguousDisagreements": { "type": "integer", "minimum": 0 },
+        "otherDisagreements": { "type": "integer", "minimum": 0 },
+        "disagreementDenominator": { "type": "integer", "minimum": 0 },
+        "otherDisagreementLimit": { "type": "integer", "minimum": 0 },
+        "latencyP95Ms": { "type": "number", "minimum": 0 },
+        "maxLatencyMs": { "type": "number", "minimum": 0 },
+        "allInvocationsBeforeTimeout": { "type": "boolean" },
+        "thresholdStatement": { "const": "Thresholds are empirical sample gates for these versioned fixtures, not proof of a universal false-approval probability." }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpusHash", "developmentCorpusHash", "schemaHash", "promptHash", "policyHash", "evaluatorHash", "coreHash", "routeMatrixHash", "runtimeBinaryHash"],
+      "properties": { "corpusHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "developmentCorpusHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "schemaHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "promptHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "policyHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "evaluatorHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "coreHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "routeMatrixHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "runtimeBinaryHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+    },
+    "sourceManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "binding", "immutableModelRevisionAttested", "servedVariantAttested", "files", "parameters", "manifestHash"],
+      "properties": {
+        "schemaVersion": { "const": "qualification-source-manifest/v1" },
+        "binding": { "const": "staleness-only" },
+        "immutableModelRevisionAttested": { "const": false },
+        "servedVariantAttested": { "const": false },
+        "files": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+        "parameters": { "type": "object" },
+        "manifestHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "faults": { "$ref": "qualification-fault-report.schema.json" }
+  }
+}

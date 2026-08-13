@@ -6,7 +6,14 @@ invariants:
   INV-4: {gate_test_status: covered}
   INV-5: {gate_test_status: covered}
   INV-6: {gate_test_status: covered}
-  INV-7: {gate_test_status: covered}
+  INV-7:
+    gate_test_status: covered
+    evidence:
+      observed_error_selector: tests/eval/classifier-gate.test.ts
+      mandatory_fault_selector: tests/eval/classifier-gate.test.ts
+      custody: tests/eval/qualification-custody.test.ts
+      source_manifest: tests/eval/classifier-gate.test.ts
+      runner: package.json:test:offline
   INV-8:
     gate_test_status: covered
     requirement: REQ-014

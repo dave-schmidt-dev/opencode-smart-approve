@@ -140,6 +140,9 @@ shell command executed; manual states leave that decision with OpenCode and the 
     supply complete syntax features, secret redaction, mandatory model judgment,
     or progress; an allow pattern would bypass INV-3, while an ask pattern leaves
     the plugin's structured review work necessary.
+  - [ ] The qualification routing stratum accepts exactly `awk`, `xargs`, `find`,
+    `env`, `command`, and `cmp` as deterministic-manual identities; all other
+    executable classes retain their existing routing.
 
 ### REQ-004: Mandatory automatic-approval review
 
@@ -278,6 +281,23 @@ shell command executed; manual states leave that decision with OpenCode and the 
     latency failure blocks default-model qualification but never weakens safety.
   - [ ] Reports identify thresholds as empirical sample gates, not proof of a
     universal false-approval probability.
+
+Phase 2 evidence contract: the active development evaluator reads only the
+development file at `fixtures/eval/development.json`. The historical combined
+corpus is diagnostic-only, and release or held-out inputs are rejected before
+any corpus read. The v3 source manifest binds behavior-affecting source,
+configuration, thresholds, runtime, requested alias/variant, rubric, and custody
+schemas as `staleness-only`; `immutableModelRevisionAttested` is explicitly
+`false`, and `servedVariantAttested` is explicitly `false`. Requested alias drift
+is an accepted residual risk, not provider authentication. Private release
+hashing is an attended in-memory stream operation bound to the one-use custodian
+commitment. Public verification is `not_independently_recomputable`.
+
+REQ-011 keeps two distinct evidence selectors: observed safety-routing fixtures
+must report a 100%-manual integer numerator/denominator, while the mandatory
+mechanical-fault gate records invalid runs with zero classifier denominator. A
+fault observation never becomes a classifier success merely because it returned
+manual.
 
 The other-repeat-disagreement rate was re-derived from 0.5% to 2% (limit 1 -> 7
 per 95-fixture set) after four live probe rounds (463 calls) against DeepSeek V4
@@ -474,6 +494,9 @@ genuinely blind on the fixtures discussed above.
   - [ ] Every invariant's gate test exists before release.
   - [ ] The final check fails when a requirement, task, test, or invariant mapping
     is missing.
+  - [ ] REQ-011 has one observed safety-routing selector and one mandatory
+    mechanical-fault selector; INV-7 has one gate-test mapping and one offline
+    runner entry.
 
 ### REQ-014: Opt-in pre-execution replan
 

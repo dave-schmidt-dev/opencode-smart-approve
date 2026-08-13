@@ -72,6 +72,13 @@ offline checks with `bun run check`; run the attended exact-runtime checks with
 qualification evidence but cannot enable approval unless every locked gate passes.
 These checks do not install the plugin globally or enable model-backed approval.
 
+The active evaluator reads only `fixtures/eval/development.json`; the historical
+combined corpus is diagnostic-only. v3 artifacts bind source, configuration,
+threshold, runtime, requested alias/variant, rubric, and custody-schema hashes as
+staleness checks. They explicitly do not attest immutable model revision or served
+variant. Private release evaluation is a human-custodian, one-use in-memory stream
+operation and public verification is not independently recomputable.
+
 The coordinator-backed parity harness is an offline contract check:
 `bun test tests/eval/reviewer-contract-parity.test.ts`. It compares the
 production registration and reviewer payload with the evaluation contract,

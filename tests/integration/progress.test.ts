@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createApprovalCoordinator } from "../../src/approval/coordinator";
 import { createProgressMetrics, createProgressReporter, createReplanProgressReporter, validateReviewTimeout, type ProgressMetrics } from "../../src/progress/reporter";
+import { createQualificationProgressReporter } from "../../scripts/classifier-gate";
 
 const modelReview = async () => ({
   status: "model_review" as const,
@@ -11,6 +12,31 @@ const modelReview = async () => ({
 });
 
 describe("persistent review progress", () => {
+  test("qualification startup, development, release, and teardown emit opaque status despite sink failure", () => {
+    const statuses: Array<{ phase: string; state: string; message: string; token: string }> = [];
+    const reporter = createQualificationProgressReporter({
+      onStatus: (status) => statuses.push(status),
+      sink: () => { throw new Error("synthetic sink failure"); },
+    });
+    const outcomes = ["allow", "manual"];
+    reporter.start("startup");
+    reporter.update("development", 1, 2);
+    reporter.finish("development");
+    reporter.start("release");
+    reporter.finish("release");
+    reporter.finish("teardown");
+    expect(statuses.map(({ phase, state }) => `${phase}:${state}`)).toEqual([
+      "startup:started",
+      "development:progress",
+      "development:finished",
+      "release:started",
+      "release:finished",
+      "teardown:finished",
+    ]);
+    expect(statuses.every(({ token }) => /^progress_[a-f0-9-]{36}$/.test(token))).toBe(true);
+    expect(outcomes).toEqual(["allow", "manual"]);
+  });
+
   test("writes immediate information and success or manual terminal statuses", () => {
     const statuses: Array<{ phase: string; variant: string; message: string }> = [];
     const callbacks: Array<() => void> = [];
