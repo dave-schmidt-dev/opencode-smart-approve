@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-candidate/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "candidate", "hashes", "sourceManifest", "providerRevision", "servedVariant", "spentHeldout", "manifestHash"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-candidate/v1" },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["promptProfile", "model", "requestedAlias", "requestedVariant", "contractVersion", "temperature", "repeats", "timeoutMs", "maxP95Ms", "maxConcurrentReviewers"],
+      "properties": {
+        "promptProfile": { "const": "smart-approve-reviewer/v1" },
+        "model": { "const": "opencode-go/deepseek-v4-flash" },
+        "requestedAlias": { "const": "opencode-go/deepseek-v4-flash" },
+        "requestedVariant": { "const": "max" },
+        "contractVersion": { "const": "classifier-qualification/v3" },
+        "temperature": { "const": 0 },
+        "repeats": { "const": 5 },
+        "timeoutMs": { "const": 30000 },
+        "maxP95Ms": { "const": 10000 },
+        "maxConcurrentReviewers": { "const": 4 }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpusHash", "developmentCorpusHash", "schemaHash", "promptHash", "policyHash", "evaluatorHash", "coreHash", "routeMatrixHash", "runtimeBinaryHash"],
+      "properties": {
+        "corpusHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "developmentCorpusHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "schemaHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "promptHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "policyHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "evaluatorHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "coreHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "routeMatrixHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "runtimeBinaryHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "sourceManifest": { "$ref": "qualification-artifact-v3.schema.json#/$defs/sourceManifest" },
+    "providerRevision": { "const": "unavailable" },
+    "servedVariant": { "const": "unavailable" },
+    "spentHeldout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixtureIDs", "hashes"],
+      "properties": {
+        "fixtureIDs": { "type": "array", "maxItems": 0 },
+        "hashes": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "manifestHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

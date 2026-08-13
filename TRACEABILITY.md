@@ -28,6 +28,8 @@ Requested alias drift remains an accepted residual risk because the manifest is
 staleness-only and explicitly does not attest immutable model revision or served
 variant.
 
+The fixed-candidate selector is `tests/eval/classifier-gate.test.ts` :: `freezes one source-current candidate with no provider or held-out attestation`; it covers the singular candidate, current hashes, unavailable provider/served-variant status, and empty spent-heldout arrays.
+
 ## INV-7 runner evidence
 
 `INVARIANTS.md` contains exactly one INV-7 gate mapping to

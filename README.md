@@ -79,6 +79,11 @@ staleness checks. They explicitly do not attest immutable model revision or serv
 variant. Private release evaluation is a human-custodian, one-use in-memory stream
 operation and public verification is not independently recomputable.
 
+After the offline evidence phase, the native candidate boundary is explicit:
+`bun run scripts/classifier-gate.ts --freeze-candidate eval-results/frozen-candidate-manifest.json`
+creates the sole source-current candidate, and `--validate-candidate` checks it.
+Neither command reads the private release stream or enables model approval.
+
 The coordinator-backed parity harness is an offline contract check:
 `bun test tests/eval/reviewer-contract-parity.test.ts`. It compares the
 production registration and reviewer payload with the evaluation contract,

@@ -299,6 +299,13 @@ mechanical-fault gate records invalid runs with zero classifier denominator. A
 fault observation never becomes a classifier success merely because it returned
 manual.
 
+The fixed-candidate boundary is singular: `eval-results/frozen-candidate-manifest.json`
+contains one prompt/profile/model candidate, current source/config/threshold/runtime
+hashes, the requested alias and variant, and empty spent-heldout identifier/hash
+arrays. It records `providerRevision: unavailable` and `servedVariant: unavailable`;
+there is no selection or comparison list. The validator rejects any candidate drift
+before the human development gate begins.
+
 The other-repeat-disagreement rate was re-derived from 0.5% to 2% (limit 1 -> 7
 per 95-fixture set) after four live probe rounds (463 calls) against DeepSeek V4
 Flash measured an ~1.7% background disagreement rate on benign fixtures squarely

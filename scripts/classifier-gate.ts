@@ -49,6 +49,36 @@ export * from "./qualification/custody";
 
 export type RecordedInvocation = QualificationRecord;
 
+export const CANDIDATE_SCHEMA_VERSION = "classifier-candidate/v1" as const;
+export const UNATTESTED_PROVIDER_REVISION = "unavailable" as const;
+export const UNATTESTED_SERVED_VARIANT = "unavailable" as const;
+
+export interface FrozenCandidateManifest {
+  readonly schemaVersion: typeof CANDIDATE_SCHEMA_VERSION;
+  readonly generatedAt: string;
+  readonly candidate: {
+    readonly promptProfile: "smart-approve-reviewer/v1";
+    readonly model: typeof QUALIFICATION_MODEL;
+    readonly requestedAlias: typeof QUALIFICATION_MODEL;
+    readonly requestedVariant: typeof QUALIFICATION_VARIANT;
+    readonly contractVersion: typeof QUALIFICATION_SCHEMA_VERSION;
+    readonly temperature: typeof TEMPERATURE;
+    readonly repeats: typeof REPEAT_COUNT;
+    readonly timeoutMs: typeof REVIEW_TIMEOUT_MS;
+    readonly maxP95Ms: typeof MAX_P95_MS;
+    readonly maxConcurrentReviewers: typeof MAX_CONCURRENT_REVIEWERS;
+  };
+  readonly hashes: EvaluationHashes;
+  readonly sourceManifest: EvaluationSourceManifest;
+  readonly providerRevision: typeof UNATTESTED_PROVIDER_REVISION;
+  readonly servedVariant: typeof UNATTESTED_SERVED_VARIANT;
+  readonly spentHeldout: {
+    readonly fixtureIDs: readonly [];
+    readonly hashes: readonly [];
+  };
+  readonly manifestHash: string;
+}
+
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEVELOPMENT_CORPUS_PATH = resolve(PROJECT_ROOT, "fixtures/eval/development.json");
 const LEGACY_COMBINED_CORPUS_PATH = resolve(PROJECT_ROOT, "fixtures/eval/corpus.json");
@@ -164,6 +194,7 @@ const SOURCE_MANIFEST_FILES = [
   "fixtures/eval/authoring-rubric.md",
   "fixtures/eval/qualification-artifact-v3.schema.json",
   "fixtures/eval/qualification-fault-report.schema.json",
+  "fixtures/eval/frozen-candidate-manifest.schema.json",
   "fixtures/eval/release-manifest.schema.json",
   "fixtures/eval/release-attestation.schema.json",
   "package.json",
@@ -196,6 +227,56 @@ export function currentEvaluationSourceManifest(): EvaluationSourceManifest {
 /** Bind an attended private-stream digest to the signed one-use custody commitment. */
 export function validateReleaseStreamCommitment(streamDigest: string, commitment: SignedConsumptionCommitment): boolean {
   return /^[0-9a-f]{64}$/.test(streamDigest) && streamDigest === commitment.corpusDigest && verifySignedConsumptionCommitment(commitment);
+}
+
+function candidateBase(generatedAt: string): Omit<FrozenCandidateManifest, "manifestHash"> {
+  return {
+    schemaVersion: CANDIDATE_SCHEMA_VERSION,
+    generatedAt,
+    candidate: {
+      promptProfile: "smart-approve-reviewer/v1",
+      model: QUALIFICATION_MODEL,
+      requestedAlias: QUALIFICATION_MODEL,
+      requestedVariant: QUALIFICATION_VARIANT,
+      contractVersion: QUALIFICATION_SCHEMA_VERSION,
+      temperature: TEMPERATURE,
+      repeats: REPEAT_COUNT,
+      timeoutMs: REVIEW_TIMEOUT_MS,
+      maxP95Ms: MAX_P95_MS,
+      maxConcurrentReviewers: MAX_CONCURRENT_REVIEWERS,
+    },
+    hashes: currentEvaluationHashes(),
+    sourceManifest: currentEvaluationSourceManifest(),
+    providerRevision: UNATTESTED_PROVIDER_REVISION,
+    servedVariant: UNATTESTED_SERVED_VARIANT,
+    spentHeldout: { fixtureIDs: [], hashes: [] },
+  };
+}
+
+/** Create the sole source-current candidate; no release identifiers enter it. */
+export function createFrozenCandidateManifest(generatedAt = new Date().toISOString()): FrozenCandidateManifest {
+  const base = candidateBase(generatedAt);
+  return { ...base, manifestHash: sha256(canonical(base)) };
+}
+
+/** Validate one frozen candidate against the current checkout without reading release data. */
+export function validateFrozenCandidateManifest(value: unknown): FrozenCandidateManifest {
+  assertNoSensitiveFields(value);
+  if (!isRecord(value) || value.schemaVersion !== CANDIDATE_SCHEMA_VERSION || typeof value.generatedAt !== "string") throw new Error("candidate manifest metadata is invalid");
+  const allowedRoot = ["schemaVersion", "generatedAt", "candidate", "hashes", "sourceManifest", "providerRevision", "servedVariant", "spentHeldout", "manifestHash"];
+  if (Object.keys(value).some((key) => !allowedRoot.includes(key)) || ["selection", "comparison", "candidates"].some((key) => key in value)) throw new Error("candidate manifest contains a selection or comparison list");
+  if (!isRecord(value.candidate)) throw new Error("candidate manifest candidate is missing");
+  const allowedCandidate = ["promptProfile", "model", "requestedAlias", "requestedVariant", "contractVersion", "temperature", "repeats", "timeoutMs", "maxP95Ms", "maxConcurrentReviewers"];
+  if (Object.keys(value.candidate).some((key) => !allowedCandidate.includes(key))) throw new Error("candidate manifest candidate is not singular");
+  if (canonical(value.candidate) !== canonical(candidateBase(value.generatedAt).candidate)) throw new Error("candidate manifest candidate is stale");
+  if (!isRecord(value.hashes) || canonical(value.hashes) !== canonical(currentEvaluationHashes())) throw new Error("candidate manifest hashes are stale");
+  if (!isRecord(value.sourceManifest) || canonical(value.sourceManifest) !== canonical(currentEvaluationSourceManifest())) throw new Error("candidate manifest source manifest is stale");
+  if (value.providerRevision !== UNATTESTED_PROVIDER_REVISION || value.servedVariant !== UNATTESTED_SERVED_VARIANT) throw new Error("candidate provider identity is unattested");
+  if (!isRecord(value.spentHeldout) || !Array.isArray(value.spentHeldout.fixtureIDs) || !Array.isArray(value.spentHeldout.hashes) || value.spentHeldout.fixtureIDs.length !== 0 || value.spentHeldout.hashes.length !== 0) throw new Error("candidate manifest contains spent held-out evidence");
+  if (typeof value.manifestHash !== "string") throw new Error("candidate manifest hash is missing");
+  const { manifestHash: _manifestHash, ...base } = value;
+  if (value.manifestHash !== sha256(canonical(base))) throw new Error("candidate manifest hash is invalid");
+  return value as unknown as FrozenCandidateManifest;
 }
 
 export type QualificationProgressPhase = "startup" | "development" | "release" | "teardown";
@@ -487,12 +568,14 @@ async function produceLiveQualification(path = ARTIFACT_PATH): Promise<Qualifica
 }
 
 const RELEASE_INPUT_OPTIONS = new Set(["--heldout", "--heldout-corpus", "--release", "--release-corpus", "--private", "--private-corpus", "--combined", "--combined-corpus", "--bundle", "--corpus", "--release-input", "--live-release"]);
+const VALUE_OPTIONS = new Set(["--artifact", "--freeze-candidate", "--validate-candidate"]);
 
 export function validateDevelopmentArguments(argv: readonly string[]): void {
-  for (const argument of argv) {
+  for (const [index, argument] of argv.entries()) {
+    if (index > 0 && VALUE_OPTIONS.has(argv[index - 1]!)) continue;
     const option = argument.includes("=") ? argument.slice(0, argument.indexOf("=")) : argument;
     if (RELEASE_INPUT_OPTIONS.has(option) || isReleaseInputName(argument) && argument !== "--live" && argument !== "--development") throw new Error("development qualification refuses combined, held-out, private, or release input");
-    if (argument !== "--live" && argument !== "--development" && argument !== "--help" && argument !== "--artifact") throw new Error(`unknown development qualification option: ${argument}`);
+    if (argument !== "--live" && argument !== "--development" && argument !== "--help" && !VALUE_OPTIONS.has(argument) && argument !== "--freeze-candidate" && argument !== "--validate-candidate") throw new Error(`unknown development qualification option: ${argument}`);
   }
 }
 
@@ -500,6 +583,25 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   try {
     // Parse and reject release-input options before opening any corpus or artifact.
     validateDevelopmentArguments(argv);
+    const freezeCandidateIndex = argv.indexOf("--freeze-candidate");
+    const validateCandidateIndex = argv.indexOf("--validate-candidate");
+    if (freezeCandidateIndex >= 0 || validateCandidateIndex >= 0) {
+      if (freezeCandidateIndex >= 0 && validateCandidateIndex >= 0) throw new Error("candidate command modes are mutually exclusive");
+      const optionIndex = freezeCandidateIndex >= 0 ? freezeCandidateIndex : validateCandidateIndex;
+      const candidatePath = argv[optionIndex + 1];
+      if (!candidatePath || candidatePath.startsWith("--")) throw new Error(`${argv[optionIndex]} requires a candidate manifest path`);
+      if (freezeCandidateIndex >= 0) {
+        const candidate = createFrozenCandidateManifest();
+        mkdirSync(dirname(resolve(candidatePath)), { recursive: true });
+        writeFileSync(candidatePath, `${JSON.stringify(candidate, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+        console.log(JSON.stringify({ candidate: candidatePath, manifestHash: candidate.manifestHash, providerRevision: candidate.providerRevision, servedVariant: candidate.servedVariant }));
+      } else {
+        const candidate = JSON.parse(readFileSync(candidatePath, "utf8")) as unknown;
+        const validated = validateFrozenCandidateManifest(candidate);
+        console.log(JSON.stringify({ candidate: candidatePath, manifestHash: validated.manifestHash, providerRevision: validated.providerRevision, servedVariant: validated.servedVariant }));
+      }
+      return 0;
+    }
     const artifactIndex = argv.indexOf("--artifact");
     const artifactPath = artifactIndex >= 0 ? argv[artifactIndex + 1] : undefined;
     if (artifactIndex >= 0 && (!artifactPath || artifactPath.startsWith("--"))) throw new Error("--artifact requires a development artifact path");

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CANDIDATE_SCHEMA_VERSION,
   CATEGORIES,
   FAULT_BOUNDARIES,
   MAX_CONCURRENT_REVIEWERS,
@@ -25,6 +26,7 @@ import {
   assertThresholdConfiguration,
   currentEvaluationHashes,
   currentEvaluationSourceManifest,
+  createFrozenCandidateManifest,
   createFaultObservation,
   evaluateCorpus,
   evaluateFaults,
@@ -38,8 +40,11 @@ import {
   createSignedConsumptionCommitment,
   validateReleaseStreamCommitment,
   validateDevelopmentArguments,
+  validateFrozenCandidateManifest,
   validateQualificationArtifact,
   validateQualificationRecord,
+  UNATTESTED_PROVIDER_REVISION,
+  UNATTESTED_SERVED_VARIANT,
   type Corpus,
   type CorpusReport,
   type Decision,
@@ -123,6 +128,41 @@ describe("classifier qualification v3", () => {
     expect(source.parameters.requestedAlias).toBe(QUALIFICATION_MODEL);
     expect(source.parameters.requestedVariant).toBe(QUALIFICATION_VARIANT);
     expect(assertThresholdConfiguration()).toBeUndefined();
+  });
+
+  test("freezes one source-current candidate with no provider or held-out attestation", async () => {
+    const candidate = createFrozenCandidateManifest("2026-08-13T00:00:00.000Z");
+    expect(candidate.schemaVersion).toBe(CANDIDATE_SCHEMA_VERSION);
+    expect(candidate.providerRevision).toBe(UNATTESTED_PROVIDER_REVISION);
+    expect(candidate.servedVariant).toBe(UNATTESTED_SERVED_VARIANT);
+    expect(candidate.spentHeldout).toEqual({ fixtureIDs: [], hashes: [] });
+    expect(validateFrozenCandidateManifest(candidate)).toEqual(candidate);
+
+    const tamperedCases: Array<[string, (value: any) => void]> = [
+      ["prompt", (value) => { value.hashes.promptHash = "0".repeat(64); }],
+      ["policy", (value) => { value.hashes.policyHash = "0".repeat(64); }],
+      ["alias", (value) => { value.candidate.requestedAlias = "other/model"; }],
+      ["variant", (value) => { value.candidate.requestedVariant = "other"; }],
+      ["threshold", (value) => { value.candidate.maxP95Ms = 1; }],
+      ["runtime", (value) => { value.hashes.runtimeBinaryHash = "0".repeat(64); }],
+      ["source", (value) => { value.sourceManifest.files["src/plugin.ts"] = "0".repeat(64); }],
+      ["heldout", (value) => { value.spentHeldout.fixtureIDs.push("fixture-id"); }],
+      ["selection", (value) => { value.selection = []; }],
+    ];
+    for (const [name, mutate] of tamperedCases) {
+      const tampered = structuredClone(candidate) as any;
+      mutate(tampered);
+      expect(() => validateFrozenCandidateManifest(tampered), name).toThrow(/candidate manifest/);
+    }
+
+    const root = mkdtempSync(join(tmpdir(), "frozen-candidate-"));
+    const path = join(root, "candidate.json");
+    try {
+      expect(await main(["--freeze-candidate", path])).toBe(0);
+      expect(await main(["--validate-candidate", path])).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("loads only the development file and meets every category minimum", () => {
