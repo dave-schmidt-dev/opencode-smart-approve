@@ -436,6 +436,41 @@ describe("runtime preflight ordering", () => {
     }
   });
 
+  test("a seeded ledger records the true consumption number for a re-draw", () => {
+    // A corpus consumed under a previous ledger must not present its next draw
+    // as a first draw. Seeding the count tells the monotonic check the truth
+    // rather than defeating it.
+    const root = mkdtempSync(join(tmpdir(), "machine-release-seeded-"));
+    try {
+      const ledgerPath = join(root, "ledger.json");
+      initializeCustodyLedger(ledgerPath, undefined, 1);
+      const record = readCustodyLedger(ledgerPath);
+      expect(record.state).toBe("available");
+      expect(record.consumptionNumber).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an aggregate carries prior consumptions so it cannot read as a first draw", () => {
+    const corpus = buildCorpus();
+    const results = corpus.release.flatMap((entry) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({
+      fixtureID: entry.id,
+      repeat: index + 1,
+      decision: entry.expectedDecision,
+      route: entry.route,
+      providerAttempted: entry.providerAttempted,
+      valid: true,
+      latencyMs: 10,
+    })));
+    const prior = [{ consumptionNumber: 1, reason: "aborted on an unset OPENCODE_AUTH_PATH; zero provider calls" }];
+    const aggregate = scoreMachineRun({ corpus, results, corpusDigest: CANDIDATE, custodyNumber: 2, priorConsumptions: prior, generatedAt: AUTHORED_AT });
+    expect(aggregate.custodyNumber).toBe(2);
+    expect(aggregate.priorConsumptions).toEqual(prior);
+    // A genuine first draw stays clean: no empty field to explain away.
+    expect(scoreMachineRun({ corpus, results, corpusDigest: CANDIDATE, custodyNumber: 1, generatedAt: AUTHORED_AT }).priorConsumptions).toBeUndefined();
+  });
+
   test("the preflight names the auth path without reading its contents", () => {
     const previous = process.env.OPENCODE_AUTH_PATH;
     delete process.env.OPENCODE_AUTH_PATH;

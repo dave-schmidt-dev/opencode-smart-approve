@@ -108,6 +108,12 @@ export interface MachineAggregate {
   readonly candidateManifestHash: string;
   readonly corpusDigest: string;
   readonly custodyNumber: number;
+  /**
+   * Consumptions of this corpus that preceded the one this aggregate reports.
+   * Present only when a prior ledger was spent, so an aggregate can never read
+   * as a first draw when it is not one.
+   */
+  readonly priorConsumptions?: readonly { readonly consumptionNumber: number; readonly reason: string }[];
   readonly corpusVersion: string;
   readonly provenance: MachineReleaseCorpus["provenance"];
   readonly generatedAt: string;
@@ -261,6 +267,7 @@ export function scoreMachineRun(input: {
   readonly results: readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; valid: boolean; latencyMs: number }[];
   readonly corpusDigest: string;
   readonly custodyNumber: number;
+  readonly priorConsumptions?: readonly { readonly consumptionNumber: number; readonly reason: string }[];
   readonly generatedAt: string;
 }): MachineAggregate {
   const labels = labelIndex(input.corpus.release);
@@ -319,6 +326,7 @@ export function scoreMachineRun(input: {
     candidateManifestHash: input.corpus.bindings.candidateManifestHash,
     corpusDigest: input.corpusDigest,
     custodyNumber: input.custodyNumber,
+    ...(input.priorConsumptions && input.priorConsumptions.length > 0 ? { priorConsumptions: input.priorConsumptions } : {}),
     corpusVersion: input.corpus.corpusVersion,
     provenance: input.corpus.provenance,
     generatedAt: input.generatedAt,
@@ -346,6 +354,12 @@ export interface MachineReleaseOptions {
   readonly ledgerPath: string;
   readonly aggregatePath: string;
   readonly generatedAt: string;
+  /**
+   * Consumptions of this corpus under a previous, now-spent ledger. Supplying
+   * them seeds the new ledger's count so this run records its true consumption
+   * number, and copies the reasons into the aggregate. Omit for a first draw.
+   */
+  readonly priorConsumptions?: readonly { readonly consumptionNumber: number; readonly reason: string }[];
   readonly onStatus?: (message: string) => void;
 }
 
@@ -363,10 +377,11 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // A fresh ledger starts `available` at consumption 0; the first spend is 1.
   // An existing ledger that is already spent will reject this run, which is the
   // intended one-use behaviour rather than something to work around.
+  const priorConsumptions = options.priorConsumptions ?? [];
   if (!existsSync(resolve(options.ledgerPath))) {
     mkdirSync(dirname(resolve(options.ledgerPath)), { recursive: true, mode: 0o700 });
-    initializeCustodyLedger(options.ledgerPath);
-    onStatus("custody: initialized a fresh ledger");
+    initializeCustodyLedger(options.ledgerPath, undefined, priorConsumptions.length);
+    onStatus(priorConsumptions.length === 0 ? "custody: initialized a fresh ledger" : `custody: initialized a ledger seeded with ${priorConsumptions.length} prior consumption(s)`);
   }
   const current = readCustodyLedger(options.ledgerPath);
   const consumptionNumber = current.state === "reserved" ? current.consumptionNumber : current.consumptionNumber + 1;
@@ -391,7 +406,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const blinded = blindFixtures(corpus.release);
   onStatus(`blinded ${blinded.length} fixtures; ${corpus.release.filter((fixture) => fixture.route === "reviewer").length} are reviewer-routed`);
   const results = await runBlindedDraw({ blinded, onStatus });
-  const aggregate = scoreMachineRun({ corpus, results, corpusDigest, custodyNumber: spent.consumptionNumber, generatedAt: options.generatedAt });
+  const aggregate = scoreMachineRun({ corpus, results, corpusDigest, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt });
   await Bun.write(resolve(options.aggregatePath), `${JSON.stringify(aggregate, null, 2)}\n`);
   return aggregate;
 }
@@ -402,12 +417,15 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const aggregatePath = argv[2] ?? resolve(PROJECT_ROOT, "eval-results/machine-release-aggregate.json");
   const generatedAt = argv[3];
   if (!generatedAt) {
-    console.error("usage: machine-release.ts <corpus> <ledger> <aggregate> <iso-timestamp>");
+    console.error("usage: machine-release.ts <corpus> <ledger> <aggregate> <iso-timestamp> [prior-consumptions-json]");
     return 1;
   }
+  // Declaring a prior consumption is a disclosure, not a bypass: it raises this
+  // run's recorded consumption number and stamps the reason into the aggregate.
+  const priorConsumptions = argv[4] ? JSON.parse(argv[4]) as readonly { consumptionNumber: number; reason: string }[] : undefined;
   try {
-    const aggregate = await runMachineRelease({ corpusPath, ledgerPath, aggregatePath, generatedAt, onStatus: (message) => console.error(`[machine-release] ${message}`) });
-    console.log(JSON.stringify({ terminal: aggregate.terminal, observations: aggregate.observations, providerCalls: aggregate.providerCalls, criticalFalseApprovals: aggregate.criticalFalseApprovals, benignFalseManual: `${aggregate.benignFalseManual}/${aggregate.benignDenominator}`, p95LatencyMs: aggregate.p95LatencyMs, failures: aggregate.failures }, null, 2));
+    const aggregate = await runMachineRelease({ corpusPath, ledgerPath, aggregatePath, generatedAt, priorConsumptions, onStatus: (message) => console.error(`[machine-release] ${message}`) });
+    console.log(JSON.stringify({ terminal: aggregate.terminal, custodyNumber: aggregate.custodyNumber, observations: aggregate.observations, providerCalls: aggregate.providerCalls, criticalFalseApprovals: aggregate.criticalFalseApprovals, benignFalseManual: `${aggregate.benignFalseManual}/${aggregate.benignDenominator}`, p95LatencyMs: aggregate.p95LatencyMs, failures: aggregate.failures }, null, 2));
     return aggregate.terminal === "machine-release-pass" ? 0 : 2;
   } catch (error) {
     console.error(`[machine-release] failed: ${error instanceof Error ? error.message : String(error)}`);

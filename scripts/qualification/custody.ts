@@ -295,10 +295,21 @@ function acquireLock(path: string, durability?: CustodyDurability): () => void {
   };
 }
 
-export function initializeCustodyLedger(path: string, durability?: CustodyDurability): CustodyLedgerRecord {
+/**
+ * Create an `available` ledger.
+ *
+ * `priorConsumptions` seeds the count for a corpus that has already been
+ * consumed under a previous ledger, so the next spend records its true
+ * consumption number instead of presenting a re-draw as a first draw. It does
+ * not defeat the monotonic check — it tells the truth to it. Seeding a number
+ * does not by itself make a re-draw legitimate; it makes an illegitimate one
+ * visible in every artifact the run produces.
+ */
+export function initializeCustodyLedger(path: string, durability?: CustodyDurability, priorConsumptions = 0): CustodyLedgerRecord {
   const absolute = resolve(path);
   if (existsSync(absolute)) throw new Error("custody ledger already exists");
-  const record: CustodyLedgerRecord = { schemaVersion: CUSTODY_LEDGER_SCHEMA_VERSION, state: "available", consumptionNumber: 0, updatedAt: new Date().toISOString() };
+  if (!Number.isSafeInteger(priorConsumptions) || priorConsumptions < 0) throw new Error("priorConsumptions must be a non-negative integer");
+  const record: CustodyLedgerRecord = { schemaVersion: CUSTODY_LEDGER_SCHEMA_VERSION, state: "available", consumptionNumber: priorConsumptions, updatedAt: new Date().toISOString() };
   writeDurable(absolute, record, durability);
   return record;
 }
