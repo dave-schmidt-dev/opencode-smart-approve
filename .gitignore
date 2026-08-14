@@ -12,3 +12,4 @@ coverage/
 dist/
 spikes/
 *.log
+.DS_Store

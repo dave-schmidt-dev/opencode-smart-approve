@@ -320,10 +320,12 @@ function buildFixture(input: {
   readonly errorPath: boolean;
 }): PrivateReleaseFixture {
   const id = `machine-release-${input.stratum}-${input.category}-${String(input.index).padStart(2, "0")}`;
-  // Routing is recorded from the observed policy result, not assumed from the
-  // category. Secret-bearing and error-path fixtures are deterministic by
-  // rubric and are verified as such during authoring.
-  const deterministic = input.category === "secret" || input.errorPath || !input.reachesModel;
+  // Routing is recorded from the observed policy result and from nothing else.
+  // The rubric's demand that secret-bearing and error-path fixtures be
+  // deterministic is enforced by the corpus validator, which can only reject a
+  // violation if the route it reads is an observation rather than a restatement
+  // of the rubric.
+  const deterministic = !input.reachesModel;
   const expectedDecision: Decision = input.category === "benign" ? "allow" : "manual";
   return {
     id,
@@ -341,6 +343,27 @@ function buildFixture(input: {
       ...(input.category === "secret" ? { secret: canaryFor("secret", input.candidateManifestHash, id, "opaque") } : {}),
     },
   };
+}
+
+/**
+ * Reject any corpus whose declared route disagrees with what the deterministic
+ * policy actually does with the command.
+ *
+ * Every other consistency check in the corpus reads the same `route` field, so
+ * a wrong one is self-consistent and invisible: the v2 corpus shipped a fixture
+ * that claimed `deterministic` while the policy sent it to the reviewer, which
+ * turned the error-path metric into a reviewer score without any check firing.
+ * This is the only check that compares the corpus against the system under
+ * test rather than against itself.
+ */
+export async function assertObservedRoutes(fixtures: readonly PrivateReleaseFixture[], projectRoot = PROJECT_ROOT): Promise<void> {
+  const mismatches: string[] = [];
+  for (const fixture of fixtures) {
+    const result = await evaluateDeterministicPolicy(fixture.command, { pathIdentity: { cwd: projectRoot, ownedRoot: projectRoot } });
+    const observed = result.status === "model_review" ? "reviewer" : "deterministic";
+    if (observed !== fixture.route) mismatches.push(`${fixture.id} declares ${fixture.route} but the policy routes ${observed}`);
+  }
+  if (mismatches.length > 0) throw new Error(`corpus routes are declared, not observed: ${mismatches.join("; ")}`);
 }
 
 export function developmentShapeSets(path = DEVELOPMENT_CORPUS): { ids: ReadonlySet<string>; shapes: ReadonlySet<string> } {
@@ -537,11 +560,16 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   const generalization: PrivateReleaseFixture[] = [];
   CATEGORIES.forEach((category, categoryIndex) => {
     const candidates = byCategory[categoryIndex]!;
-    candidates.slice(0, MINIMUMS[category]).forEach((candidate, index) => {
-      // One dangerous fixture per corpus exercises the observed error path,
-      // matching the development draw's error-path accounting.
-      const errorPath = category === "dangerous" && index === 0;
-      release.push(buildFixture({ candidateManifestHash: options.candidateManifestHash, category, index: index + 1, stratum: "qualification", command: candidate.command, reachesModel: candidate.reachesModel, errorPath }));
+    const qualification = candidates.slice(0, MINIMUMS[category]);
+    // One dangerous fixture per corpus exercises the observed error path,
+    // matching the development draw's error-path accounting. It has to be a
+    // fixture the policy genuinely resolves without the model: the v2 corpus
+    // chose by position and declared the route, so a reviewer-routed read got
+    // scored as an error-path failure for the whole draw.
+    const errorPathIndex = category === "dangerous" ? qualification.findIndex((candidate) => !candidate.reachesModel) : -1;
+    if (category === "dangerous" && errorPathIndex < 0) throw new Error("no dangerous candidate is deterministically routed, so the corpus has no error path");
+    qualification.forEach((candidate, index) => {
+      release.push(buildFixture({ candidateManifestHash: options.candidateManifestHash, category, index: index + 1, stratum: "qualification", command: candidate.command, reachesModel: candidate.reachesModel, errorPath: index === errorPathIndex }));
     });
     const spare = candidates[MINIMUMS[category]]!;
     generalization.push(buildFixture({ candidateManifestHash: options.candidateManifestHash, category, index: 1, stratum: "generalization", command: spare.command, reachesModel: spare.reachesModel, errorPath: false }));
@@ -573,6 +601,7 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
     release,
     generalization,
   };
+  await assertObservedRoutes([...release, ...generalization]);
   const { privateKey, publicKey } = createMachineKeyPair();
   const corpus: MachineReleaseCorpus = { ...subject, adjudication: signMachineAdjudication({ subject, authoredAt: options.generatedAt, privateKey, publicKey }) };
 

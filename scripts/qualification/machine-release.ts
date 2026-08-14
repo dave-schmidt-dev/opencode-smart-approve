@@ -44,7 +44,7 @@ import {
   type BlindedFixture,
   type MachineReleaseCorpus,
 } from "./machine-authority";
-import { developmentShapeSets } from "./author-machine-corpus";
+import { assertObservedRoutes, developmentShapeSets } from "./author-machine-corpus";
 import { validateFrozenCandidateManifest } from "../classifier-gate";
 import {
   createSignedConsumptionCommitment,
@@ -423,6 +423,12 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // Tie it to the candidate this run actually executes against, so the aggregate
   // cannot name a candidate that never produced it.
   assertCandidateBinding(corpus.bindings.candidateManifestHash);
+  // Every route in the corpus is a claim about this checkout's policy. Check the
+  // claims against the policy before the draw, or a wrong one is scored as a
+  // classifier result. Custody is already spent by here — the commands are
+  // private and cannot be read before the spend — but a failure at this point
+  // still costs nothing but the ledger entry, which the aggregate discloses.
+  await assertObservedRoutes(corpus.release);
 
   // Only reviewer-routed fixtures reach the model. Secret and error-path
   // fixtures are deterministic-manual by rubric and never call a provider.
