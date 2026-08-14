@@ -80,6 +80,25 @@ approval, secret disclosure, schema failure, or non-fail-closed error blocks
 enabling or releasing model-backed automatic approval. A source release is safe
 only while the immutable qualification lock remains disabled.
 
+### INV-9 — A release artifact MUST accurately name the authority that produced it
+area: ["scripts/qualification/machine-authority.ts", "scripts/qualification/machine-release.ts", "scripts/qualification/release-corpus.ts"]
+gate_test: tests/eval/machine-release.test.ts
+threshold: 3
+rationale: Qualification recognizes three corpus authorities: `automated-draft`
+(structural rehearsal, never release eligible), `machine-adjudicated` (a model
+authored and labeled the corpus), and `human-adjudicated` (independent human
+author, adjudicator, and custodian). Owner decision, 2026-08-14: release may
+proceed on the machine authority without hand authorship. The safety property
+that survives is not human review but honest labeling — no artifact may claim
+an authority it does not have. A machine-adjudicated corpus therefore carries a
+required, signature-covered disclosure that no human authored, adjudicated, or
+attested it, and its signature attests byte integrity only. Nothing on the
+machine path can emit a `human-adjudicated` artifact, and altering the
+disclosure invalidates the signature. What a machine run does establish is
+narrower than the human path: the corpus author is independent of the
+classifier under test, but a single labeler means corpus label errors are not
+independently caught.
+
 ### INV-8 — Pre-execution replan MUST be fixed-feedback, bounded, and manual-dominant
 area: ["src/replan/**/*.ts", "src/policy/**/*.ts", "src/plugin.ts"]
 gate_test: tests/integration/replan-guard.test.ts

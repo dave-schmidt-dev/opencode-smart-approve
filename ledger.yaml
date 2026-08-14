@@ -30,4 +30,12 @@ invariants:
       privacy: tests/security/audit-redaction.test.ts
       progress: tests/integration/progress.test.ts
       e2e: tests/e2e/opencode-contract-canary.test.ts
+  INV-9:
+    gate_test_status: covered
+    evidence:
+      blinding: tests/eval/machine-release.test.ts
+      attestation: tests/eval/machine-release.test.ts
+      disclosure: tests/eval/machine-release.test.ts
+      corpus_validation: tests/eval/machine-release.test.ts
+      runner: package.json:test:offline
 resolutions: {}
