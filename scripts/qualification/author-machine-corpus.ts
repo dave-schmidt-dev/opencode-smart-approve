@@ -31,6 +31,7 @@ import {
 } from "./machine-authority";
 import { structuralKey } from "./structural-key";
 import type { PrivateReleaseFixture } from "./release-corpus";
+import { validateFrozenCandidateManifest } from "../classifier-gate";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
@@ -597,8 +598,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return 1;
   }
   try {
-    const manifest = JSON.parse(readFileSync(resolve(candidatePath), "utf8")) as { manifestHash?: string };
-    if (typeof manifest.manifestHash !== "string") throw new Error("candidate manifest has no manifestHash");
+    // Validate against the current checkout, not just for a well-formed hash.
+    // Authoring a corpus against a stale candidate produces fixtures bound to a
+    // manifest the eventual run will not have been executed against, and the
+    // authoring cost is only discovered to be wasted at draw time.
+    const manifest = validateFrozenCandidateManifest(JSON.parse(readFileSync(resolve(candidatePath), "utf8")));
     const corpus = await authorMachineCorpus({
       candidateManifestHash: manifest.manifestHash,
       outputPath,

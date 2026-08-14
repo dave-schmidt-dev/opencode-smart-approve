@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CATEGORIES, MINIMUMS, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE } from "../../scripts/qualification/core";
@@ -18,7 +18,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertQualificationRuntime, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertQualificationRuntime, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
 import { initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
 import { structuralKey } from "../../scripts/qualification/structural-key";
 import { authorCategory, commandHeads, extractJSONArray, extractText } from "../../scripts/qualification/author-machine-corpus";
@@ -469,6 +469,27 @@ describe("runtime preflight ordering", () => {
     expect(aggregate.priorConsumptions).toEqual(prior);
     // A genuine first draw stays clean: no empty field to explain away.
     expect(scoreMachineRun({ corpus, results, corpusDigest: CANDIDATE, custodyNumber: 1, generatedAt: AUTHORED_AT }).priorConsumptions).toBeUndefined();
+  });
+
+  test("a corpus bound to a candidate other than the current one is rejected", () => {
+    // `validateMachineReleaseCorpus` only checks the binding is a well-formed
+    // digest, so a corpus authored against an older checkout would otherwise
+    // produce an aggregate naming a candidate that never ran it.
+    const root = mkdtempSync(join(tmpdir(), "machine-release-binding-"));
+    try {
+      const manifestPath = join(root, "candidate.json");
+      const live = JSON.parse(readFileSync(join(import.meta.dir, "../../eval-results/frozen-candidate-manifest.json"), "utf8")) as { manifestHash: string };
+      writeFileSync(manifestPath, JSON.stringify(live));
+      expect(() => assertCandidateBinding(CANDIDATE, manifestPath)).toThrow();
+      // A manifest that no longer describes this checkout fails on its own,
+      // before any binding comparison, so both sides cannot agree on a hash
+      // that has stopped meaning anything.
+      const stale = { ...live, sourceManifest: { ...(live as Record<string, unknown>).sourceManifest as object, binding: "not-a-real-binding" } };
+      writeFileSync(manifestPath, JSON.stringify(stale));
+      expect(() => assertCandidateBinding(live.manifestHash, manifestPath)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("the preflight names the auth path without reading its contents", () => {

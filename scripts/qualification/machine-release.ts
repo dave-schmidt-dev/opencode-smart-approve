@@ -45,6 +45,7 @@ import {
   type MachineReleaseCorpus,
 } from "./machine-authority";
 import { developmentShapeSets } from "./author-machine-corpus";
+import { validateFrozenCandidateManifest } from "../classifier-gate";
 import {
   createSignedConsumptionCommitment,
   digestPrivateBytes,
@@ -163,6 +164,22 @@ async function waitForServer(baseUrl: string, child: { exitCode: number | null }
  * the point — an unset `OPENCODE_AUTH_PATH` used to abort the run *after* the
  * irreversible spend, burning a one-use ledger on a shell mistake.
  */
+/**
+ * Assert the corpus was bound to a candidate manifest that still describes this
+ * checkout.
+ *
+ * `validateMachineReleaseCorpus` only checks that the binding is a well-formed
+ * digest, so a corpus authored against an older checkout would produce an
+ * aggregate naming a candidate the run was not executed against. Digest
+ * equality alone is not enough: the frozen manifest must also still validate,
+ * or both sides agree on a hash that no longer describes the source.
+ */
+export function assertCandidateBinding(boundHash?: string, manifestPath = resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json")): string {
+  const manifest = validateFrozenCandidateManifest(JSON.parse(readFileSync(manifestPath, "utf8")));
+  if (boundHash !== undefined && manifest.manifestHash !== boundHash) throw new Error(`corpus is bound to candidate ${boundHash.slice(0, 8)} but the current candidate is ${manifest.manifestHash.slice(0, 8)}`);
+  return manifest.manifestHash;
+}
+
 export function assertQualificationRuntime(): string {
   accessSync(OPENCODE_BIN, constants.X_OK);
   const versionProbe = Bun.spawnSync([OPENCODE_BIN, "--version"], { stdout: "pipe", stderr: "pipe" });
@@ -366,9 +383,11 @@ export interface MachineReleaseOptions {
 export async function runMachineRelease(options: MachineReleaseOptions): Promise<MachineAggregate> {
   const onStatus = options.onStatus ?? (() => undefined);
   // Every irreversible step is below this line. Fail on a missing binary, a
-  // wrong OpenCode version, or an unset auth path while the ledger is still
-  // `available` — an environment mistake must not consume a one-use custody.
+  // wrong OpenCode version, an unset auth path, or a candidate manifest that no
+  // longer describes this checkout, while the ledger is still `available` — an
+  // environment or staleness mistake must not consume a one-use custody.
   assertQualificationRuntime();
+  assertCandidateBinding();
   const corpusBytes = readFileSync(resolve(options.corpusPath), "utf8");
   const corpusDigest = digestPrivateBytes(corpusBytes);
   // The commitment is machine-generated and labeled as such. It binds this run
@@ -400,6 +419,10 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const development = developmentShapeSets();
   const errors = validateMachineReleaseCorpus(corpus, development.ids, development.shapes);
   if (errors.length > 0) throw new Error(`machine release corpus failed validation: ${errors.join("; ")}`);
+  // The corpus binding is only a well-formed digest to `validateMachineReleaseCorpus`.
+  // Tie it to the candidate this run actually executes against, so the aggregate
+  // cannot name a candidate that never produced it.
+  assertCandidateBinding(corpus.bindings.candidateManifestHash);
 
   // Only reviewer-routed fixtures reach the model. Secret and error-path
   // fixtures are deterministic-manual by rubric and never call a provider.
