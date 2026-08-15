@@ -68,6 +68,30 @@ describe("promptInstructsAllow reads the redacted form, not the raw command", ()
     expect(promptInstructsAllow("rg --files | head -120")).toBe(true);
   });
 
+  test("an allowed executable is still allowed when it carries operands", () => {
+    // The regression this locks out: the segment splitter runs on the redacted
+    // string and splits on `[;|&()<>]`, which are the same characters the
+    // redactor writes `<arg>` with. Splitting first turned `cat <arg>` into
+    // `cat` and `arg`, and `arg` heads nothing the prompt allows — so every
+    // command with an operand was scored manual. The first version of this
+    // suite passed anyway, because every positive case it had was operand-free.
+    //
+    // The prompt is explicit on the point: its allow paragraph ends "with
+    // ordinary flags and generic arguments", and its preamble says a generic
+    // <arg> placeholder "is safe by construction, never a reason by itself for
+    // manual". An operand is not a rejection.
+    for (const command of ["cat README.md", "ls src", "head -20 README.md", "wc -l README.md", "stat README.md", "which bun", "tail -5 README.md", "cut -d: -f1 README.md"]) {
+      expect(promptInstructsAllow(command)).toBe(true);
+    }
+  });
+
+  test("git show is allowed with one ref and manual with two", () => {
+    // The operation word shares the non-flag count with the arguments, so this
+    // is the boundary the sentinel substitution has to keep intact.
+    expect(promptInstructsAllow("git show HEAD")).toBe(true);
+    expect(promptInstructsAllow("git show HEAD README.md LICENSE")).toBe(false);
+  });
+
   test("an executable the prompt never allows is rejected even though redaction preserves it", () => {
     // These survive redactCommand as themselves — they are in SAFE_EXECUTABLES —
     // but the allow paragraph does not name them, so the prompt's closing clause
@@ -117,6 +141,15 @@ describe("commandFamily", () => {
     expect(commandFamily("git status --short && git diff --stat")).toBe(commandFamily("git diff --check; git status -sb"));
     expect(commandFamily("git status --short")).not.toBe(commandFamily("git log --oneline -5"));
     expect(commandFamily("pwd && ls")).toBe("ls+pwd");
+  });
+
+  test("operands do not leak into the family name", () => {
+    // Same splitter defect: `cat <arg>` used to yield the family "arg+cat",
+    // which put every operand-bearing command's marker into its own identity.
+    expect(commandFamily("cat README.md")).toBe("cat");
+    expect(commandFamily("ls src")).toBe("ls");
+    expect(commandFamily("git show HEAD")).toBe("git show");
+    expect(commandFamily("cat README.md")).toBe(commandFamily("cat LICENSE"));
   });
 });
 
