@@ -447,7 +447,10 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // longer describes this checkout, while the ledger is still `available` — an
   // environment or staleness mistake must not consume a one-use custody.
   assertQualificationRuntime();
-  const candidatePath = options.candidatePath ?? resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json");
+  // Resolved like every other caller-supplied path here, so a relative
+  // `--candidate` is read against the operator's cwd rather than left to
+  // whatever happens to be current when the read lands.
+  const candidatePath = options.candidatePath ? resolve(options.candidatePath) : resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json");
   assertCandidateBinding(undefined, candidatePath);
   const corpusBytes = readFileSync(resolve(options.corpusPath), "utf8");
   const corpusDigest = digestPrivateBytes(corpusBytes);
@@ -509,8 +512,17 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
  * stripping is testable without a provider, a runtime, or a custody spend.
  */
 export function parseCandidateFlag(argv: readonly string[]): { readonly candidatePath?: string; readonly rest: readonly string[] } {
+  // Reject the shapes that would otherwise resolve to a candidate nobody chose.
+  // `--candidate=<path>` does not match the bare token, so it would survive into
+  // the positional list and be read as the corpus path; a second `--candidate`
+  // would leave the first silently winning while its own flag and path shifted
+  // every positional argument by two. Both are exactly the miscount this flag
+  // exists to prevent, so both stop the run instead of guessing.
+  const joined = argv.find((argument) => argument.startsWith("--candidate="));
+  if (joined !== undefined) throw new Error("--candidate takes its path as a separate argument, not --candidate=<path>");
   const index = argv.indexOf("--candidate");
   if (index < 0) return { rest: argv };
+  if (argv.indexOf("--candidate", index + 1) >= 0) throw new Error("--candidate given more than once");
   const candidatePath = argv[index + 1];
   if (candidatePath === undefined || candidatePath.startsWith("--")) throw new Error("--candidate requires a path");
   return { candidatePath, rest: [...argv.slice(0, index), ...argv.slice(index + 2)] };

@@ -635,17 +635,24 @@ describe("authoring shape reservation", () => {
     expect(calls).toBe(1);
   });
 
-  test("the draw names the candidate it runs against", () => {
+  test("candidate flag parsing keeps the manifest out of the positional list", () => {
     // `author-machine-corpus.ts` takes the manifest as its first argument and
     // binds the corpus to it; this run read a hardcoded default. A corpus
     // authored against a re-frozen candidate failed the draw with "candidate
-    // manifest hashes are stale", naming a superseded file nobody chose.
+    // manifest hashes are stale", naming a superseded file nobody chose. This
+    // covers the parser only — that `runMachineRelease` honours the parsed path
+    // is not asserted here, because reaching it costs a custody spend.
     expect(parseCandidateFlag(["a", "b"])).toEqual({ rest: ["a", "b"] });
     expect(parseCandidateFlag(["--candidate", "m.json", "corpus", "ledger"])).toEqual({ candidatePath: "m.json", rest: ["corpus", "ledger"] });
     expect(parseCandidateFlag(["corpus", "--candidate", "m.json", "ledger"])).toEqual({ candidatePath: "m.json", rest: ["corpus", "ledger"] });
     expect(() => parseCandidateFlag(["corpus", "--candidate"])).toThrow("requires a path");
     // A following flag is a missing value, not the path.
     expect(() => parseCandidateFlag(["--candidate", "--attended"])).toThrow("requires a path");
+    // Every shape that would otherwise bind a manifest the operator did not
+    // choose, on a command whose first irreversible act is spending custody.
+    expect(() => parseCandidateFlag(["--candidate=m.json", "corpus"])).toThrow("separate argument");
+    expect(() => parseCandidateFlag(["--candidate", "a.json", "--candidate", "b.json"])).toThrow("more than once");
+    expect(() => parseCandidateFlag(["--candidate", "--candidate", "b.json"])).toThrow("more than once");
   });
 
   test("command heads cover every pipeline segment", () => {
