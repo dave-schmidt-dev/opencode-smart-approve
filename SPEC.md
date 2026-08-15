@@ -25,8 +25,9 @@ commands proceeding without user action, every candidate command being reviewed 
 a qualified DeepSeek V4 Flash reviewer, and no error path turning into an automatic
 approval. The current build does not meet that outcome: private release
 qualification is incomplete.
-The development branch has since been re-run against a source-current frozen
-candidate and completed its aggregate pass; private release qualification
+The development branch has since been re-run against a frozen candidate and
+completed its aggregate pass, though that candidate is no longer source-current
+(see the recovery checkpoint below); private release qualification
 remains incomplete.
 
 ## 3. Scope
@@ -472,28 +473,43 @@ partially spent regardless of which resolution is chosen: a fresh held-out
 corpus is required before any future qualification run can be treated as
 genuinely blind on the fixtures discussed above.
 
-Current recovery checkpoint: the source-current candidate manifest is
-`d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`. Its
-latest aggregate development report is `development-pass`: 95 fixtures, five
+Current recovery checkpoint: the current valid candidate manifest is
+`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773`. No
+development draw has been run against it. The most recent development draw is
+bound to `d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`,
+which `--validate-candidate` now reports stale because routing and policy
+changed after that freeze, so what follows records what was measured rather than
+source-current evidence. That
+aggregate development report is `development-pass`: 95 fixtures, five
 repeats, 475 invocations, 225 valid provider calls, 475 classifier-denominator
 observations, zero invalid runs, and 2.799-second p95 latency. It has zero
 critical false approvals, zero critical or ambiguous disagreements, zero other
 disagreements, 0/200 benign false-manual observations, and 15/15 error-path
 manual observations. The report contains aggregate fields only, including a
-terminal-kind histogram, and is validated against the candidate and current
-source/config hashes.
+terminal-kind histogram. `validateDevelopmentCandidateReport` checks a report
+against both its candidate and the current source/config hashes, which this one
+passed when it was written. Re-validating it today fails with `candidate
+manifest hashes are stale`, stopping at the candidate before the report's own
+hashes are compared. That is the staleness above, not a defect in the report.
 
 The exact-runtime candidate canary, public-synthetic custody/parity suites,
 offline/package/spec gates, and OpenCode 1.18.10 integration and contract
 canaries pass. The failure-only no-corpus terminal branch remains available for
-failed development draws; its older receipts are superseded by the current
-passing candidate. The release branch remains `release-disabled`, now on
+failed development draws; its older receipts are superseded by the passing
+receipt above. The release branch remains `release-disabled`, now on
 evidence rather than on authorship: the 2026-08-14 owner decision recorded under
 INV-9 accepts a `machine-adjudicated` corpus, so a fresh private human corpus,
 an independently bound adjudicator, and a human custodian are no longer
 preconditions. Two machine-adjudicated draws have been spent and the most recent
-returned `machine-release-fail`. Provider weights and served variant remain
-unattested, and `MODEL_APPROVAL_QUALIFIED` remains `false`.
+returned `machine-release-fail`. One precondition did not survive that change
+and is recorded here rather than left implicit: `release-operator.ts` requires a
+source-current `development-pass` report bound to the same candidate and refuses
+any other terminal, while `machine-release.ts` never reads a development report
+at all — its only binding check proves the corpus and the frozen manifest agree
+and that the manifest still describes the source. A machine draw can therefore
+return `machine-release-pass` with no development evidence behind it. Provider
+weights and served variant remain unattested, and `MODEL_APPROVAL_QUALIFIED`
+remains `false`.
 
 ### REQ-012: Compatibility and packaging
 

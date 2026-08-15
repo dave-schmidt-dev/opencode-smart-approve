@@ -134,6 +134,16 @@ which records per-stratum whether a command was authored or harvested.
 reach the reviewer at all. None of these enables model approval; a passing draw
 is a precondition for flipping the gate, not the flip itself.
 
+One precondition the human wrapper enforces is absent from the machine path, and
+it is named here rather than left for a reader to discover: `release-operator.ts`
+requires a source-current `development-pass` report bound to the same candidate
+and rejects any other terminal, while `machine-release.ts` never reads a
+development report. Its binding check proves that the corpus and the frozen
+manifest name the same candidate and that the manifest still describes the
+source, which is not the same claim. A machine draw can return
+`machine-release-pass` with no development evidence behind it, and today there
+is none that would validate.
+
 The coordinator-backed parity harness is an offline contract check:
 `bun test tests/eval/reviewer-contract-parity.test.ts`. It compares the
 production registration and reviewer payload with the evaluation contract,

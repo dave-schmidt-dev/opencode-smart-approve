@@ -32,23 +32,35 @@ The fixed-candidate selector is `tests/eval/classifier-gate.test.ts` :: `freezes
 
 ## Current qualification recovery evidence
 
-The source-current development terminal report is validated by
-`scripts/classifier-gate.ts` and bound to
-`eval-results/frozen-candidate-manifest.json`. Its aggregate-only contract and
+The development terminal report is validated by `scripts/classifier-gate.ts`
+(`--validate-development-report`) and bound to
+`eval-results/frozen-candidate-manifest.json`, which is no longer source-current:
+re-validating the report today fails with `candidate manifest hashes are stale`.
+The current valid freeze is
+`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773` and no
+development draw has been run against it. Its aggregate-only contract and
 invalid-run/no-retry behavior are covered by
 `tests/eval/classifier-gate.test.ts`. The failure-only no-corpus terminal branch
 is covered by `tests/eval/qualification-terminal.test.ts` and implemented in
 `scripts/qualification/verify-terminal.ts`; it remains available for failed
-development draws, while the current source-current draw is `development-pass`.
+development draws, while the last draw taken is `development-pass`.
 Fresh draft generation, cryptographic human-envelope and
 out-of-band adjudicator-key validation, and attended custody ordering
 are covered by `tests/eval/release-corpus.test.ts` and
 `tests/eval/release-operator.test.ts`. The exact-runtime candidate lock canary
 and production/evaluation parity are covered by
 `tests/eval/reviewer-contract-parity.test.ts`.
+The machine-adjudicated path — corpus authority, provenance disclosure, custody
+ordering, and the candidate binding — is covered by
+`tests/eval/machine-release.test.ts`. One precondition is covered on the human
+path only: `release-operator.ts` requires a source-current `development-pass`
+report bound to the same candidate, asserted in `tests/eval/release-operator.test.ts`,
+and `machine-release.ts` has no equivalent check or test.
 The release checkpoint is recorded in
-`eval-results/qualification-release-gate.md`; it is `release-disabled` pending
-fresh private corpus authorship, independent adjudication, and human custody.
+`eval-results/qualification-release-gate.md`; it is `release-disabled` on
+classifier evidence, not on authorship — the 2026-08-14 owner decision under
+INV-9 accepts a `machine-adjudicated` corpus, and the most recent draw returned
+`machine-release-fail`.
 
 ## INV-7 runner evidence
 
