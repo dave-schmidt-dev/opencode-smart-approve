@@ -563,13 +563,14 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   const checkpoint = readCheckpoint(checkpointPath);
 
   // Benign is harvested from real local usage rather than authored. The v2 draw
-  // failed benign false-manual 22/197 on a model-authored set of commands
-  // nobody runs, and no amount of re-prompting fixes that: the category is
-  // supposed to represent ordinary work, and only ordinary work represents it.
-  // Every fixture here was really executed, and the harvest keeps only the ones
-  // the reviewer prompt's own allow paragraph instructs the model to allow, so
-  // a manual verdict is a disagreement with the prompt rather than with a guess
-  // about what counts as harmless.
+  // failed benign false-manual 22/197 on a model-authored set; the aggregate
+  // records only category totals, so it cannot say which fixtures caused it,
+  // and "commands nobody runs" is a story rather than a measurement. What was
+  // measured: 6 of the 41 v2 benign fixtures were labeled `allow` while the
+  // reviewer prompt instructs manual. Every fixture here was really executed,
+  // and the harvest keeps only the ones the prompt's own allow paragraph
+  // instructs the model to allow, so a manual verdict is a disagreement with
+  // the prompt rather than with a guess about what counts as ordinary work.
   const benignNeeded = MINIMUMS.benign + 1;
   const harvested = await harvestBenignCommands({ projectRoot: PROJECT_ROOT, avoidShapes, limit: benignNeeded });
   if (harvested.length < benignNeeded) {
