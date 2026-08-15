@@ -22,7 +22,16 @@ import { assertCandidateBinding, assertQualificationRuntime, REDACTION_EXEMPT_CA
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
 import { structuralKey } from "../../scripts/qualification/structural-key";
-import { assertObservedRoutes, authorCategory, commandHeads, extractJSONArray, extractText } from "../../scripts/qualification/author-machine-corpus";
+import {
+  NonRetryableAuthoringError,
+  assertObservedRoutes,
+  authorCategory,
+  commandHeads,
+  extractJSONArray,
+  extractText,
+  providerFault,
+  routeGoalFor,
+} from "../../scripts/qualification/author-machine-corpus";
 import type { PrivateReleaseFixture } from "../../scripts/qualification/release-corpus";
 
 const CANDIDATE = "d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5";
@@ -559,6 +568,71 @@ describe("authoring shape reservation", () => {
     });
     expect(accepted.length).toBe(3);
     expect(accepted.filter((candidate) => !candidate.reachesModel).length).toBe(1);
+  });
+
+  test("a stratum short only of its policy-resolved fixture is asked for exactly that", async () => {
+    // The v3 run failed here. `dangerous` filled its reviewer-routed side and
+    // then spent thirteen attempts against a brief that bans every utility the
+    // policy stops, so the one fixture it still needed was unauthorable, and the
+    // rejection feedback told it the surplus commands were mistakes.
+    const prompts: string[] = [];
+    const batches = [["git status --short"], ["rm -rf /tmp/scratch"]];
+    const accepted = await authorCategory({
+      category: "dangerous",
+      needed: 2,
+      avoidShapes: new Set<string>(),
+      timeoutMs: 1_000,
+      maxAttempts: 3,
+      resume: [{ command: "git log --all --graph", reachesModel: true }],
+      generate: async (prompt: string) => {
+        prompts.push(prompt);
+        return (batches[prompts.length - 1] ?? []).map((command) => ({ command, rationale: "destroys" }));
+      },
+      onStatus: () => undefined,
+    });
+    expect(accepted.filter((candidate) => !candidate.reachesModel).length).toBe(1);
+    expect(prompts[0]).not.toContain("Use ONLY these utilities");
+    expect(prompts[0]).toContain("decides entirely on its own");
+    expect(prompts[1]).toContain("no room left");
+    expect(prompts[1]).not.toContain("WITHOUT consulting the reviewer");
+  });
+
+  test("the route goal follows whichever side of a mixed stratum is unfilled", () => {
+    const mixed = { requirement: "either", needed: 3, deterministicFloor: 1 } as const;
+    expect(routeGoalFor({ ...mixed, accepted: [] })).toBe("any");
+    expect(routeGoalFor({ ...mixed, accepted: [{ command: "cat README.md", reachesModel: true }, { command: "ls src", reachesModel: true }] })).toBe("policy");
+    expect(routeGoalFor({ ...mixed, accepted: [{ command: "rm -rf /tmp/scratch", reachesModel: false }] })).toBe("reviewer");
+  });
+
+  test("a disabled model is read off stdout, where this CLI writes it", () => {
+    // The provider's envelope goes to stdout and stderr stays empty, so the run
+    // that hit this reported `authoring call exited 1:` with no reason at all.
+    const disabled = providerFault(`[log] starting\n${JSON.stringify({ type: "error", error: { name: "ProviderAuthError", data: { message: "Model is disabled", statusCode: 401 } } })}\n`);
+    expect(disabled?.retryable).toBe(false);
+    expect(disabled?.message).toContain("401");
+    expect(disabled?.message).toContain("Model is disabled");
+    const overloaded = providerFault(JSON.stringify({ type: "error", error: { name: "Overloaded", data: { message: "busy", statusCode: 529, isRetryable: true } } }));
+    expect(overloaded?.retryable).toBe(true);
+    expect(providerFault("plain output with no envelope")).toBeUndefined();
+  });
+
+  test("a non-retryable provider fault ends authoring instead of burning every attempt", async () => {
+    let calls = 0;
+    await expect(
+      authorCategory({
+        category: "benign",
+        needed: 1,
+        avoidShapes: new Set<string>(),
+        timeoutMs: 1_000,
+        maxAttempts: 20,
+        generate: async () => {
+          calls += 1;
+          throw new NonRetryableAuthoringError("authoring call exited 1: ProviderAuthError (401): Model is disabled");
+        },
+        onStatus: () => undefined,
+      }),
+    ).rejects.toThrow("Model is disabled");
+    expect(calls).toBe(1);
   });
 
   test("command heads cover every pipeline segment", () => {
