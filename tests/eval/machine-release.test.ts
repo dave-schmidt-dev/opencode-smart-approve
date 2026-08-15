@@ -33,6 +33,14 @@ const PROVENANCE: MachineProvenance = {
   authorVariant: "thinking",
   authorVariantServed: "unverified",
   classifierUnderTest: "opencode-go/deepseek-v4-flash",
+  commandSource: {
+    benign: "harvested-local-usage",
+    dangerous: "model-authored",
+    ambiguous: "model-authored",
+    injection: "model-authored",
+    secret: "model-authored",
+    obfuscated: "model-authored",
+  },
   independentLabelCheck: false,
   humanAttestation: false,
   disclosure: MACHINE_AUTHORITY_DISCLOSURE,
@@ -151,6 +159,35 @@ describe("machine release corpus validation", () => {
     const provenance = { ...PROVENANCE, authorModel: "opencode-go/deepseek-v4-flash" };
     const corpus = buildCorpus({ provenance } as Partial<MachineReleaseCorpus>);
     expect(validateMachineReleaseCorpus(corpus, empty, empty)).toContain("machine author and classifier under test must differ");
+  });
+
+  // Command origin has to be declared, not inferred. The disclosure says every
+  // label is machine-assigned and that `commandSource` records where the
+  // commands came from; an artifact that omits or garbles the field would leave
+  // a reader to assume the default the disclosure then misstates. Both cases
+  // fail rather than fall back.
+  test("rejects a corpus that omits the command source", () => {
+    const { commandSource: _dropped, ...withoutSource } = PROVENANCE;
+    const corpus = buildCorpus({ provenance: withoutSource } as unknown as Partial<MachineReleaseCorpus>);
+    expect(validateMachineReleaseCorpus(corpus, empty, empty)).toContain("machine provenance must declare a known command source for every category");
+  });
+
+  test("rejects a command source that names an unknown origin or skips a category", () => {
+    const unknown = buildCorpus({ provenance: { ...PROVENANCE, commandSource: { ...PROVENANCE.commandSource, benign: "hand-written" } } } as unknown as Partial<MachineReleaseCorpus>);
+    expect(validateMachineReleaseCorpus(unknown, empty, empty)).toContain("machine provenance must declare a known command source for every category");
+    const { obfuscated: _missing, ...partial } = PROVENANCE.commandSource;
+    const incomplete = buildCorpus({ provenance: { ...PROVENANCE, commandSource: partial } } as unknown as Partial<MachineReleaseCorpus>);
+    expect(validateMachineReleaseCorpus(incomplete, empty, empty)).toContain("machine provenance must declare a known command source for every category");
+  });
+
+  test("the disclosure separates label origin from command origin", () => {
+    // A harvested benign stratum makes "authored and labeled by a model" false:
+    // those commands were written by a person doing real work. The claim that
+    // has to survive is the one about labels, because that is what decides
+    // whether the corpus can be trusted as ground truth.
+    expect(MACHINE_AUTHORITY_DISCLOSURE).toContain("Every label in this corpus was assigned by a model");
+    expect(MACHINE_AUTHORITY_DISCLOSURE).toContain("harvested from real local shell usage");
+    expect(MACHINE_AUTHORITY_DISCLOSURE).not.toContain("Corpus authored and labeled by a model");
   });
 
   test("rejects fixture IDs that overlap the development corpus", () => {

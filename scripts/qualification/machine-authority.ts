@@ -26,12 +26,29 @@ export const MACHINE_RUBRIC_BINDING = "fixtures/eval/authoring-rubric.md" as con
 /**
  * The standing disclosure carried by every machine-adjudicated artifact. It is
  * a required field so that a reader of the JSON cannot miss it.
+ *
+ * The disclosure separates two claims that are easy to conflate. Every *label*
+ * in this corpus is machine-assigned, without exception, and that is the claim
+ * that matters for whether the corpus can be trusted as ground truth. Where a
+ * *command* came from is a separate fact, recorded per category in
+ * `commandSource`, because a stratum harvested from real local usage was
+ * written by a person doing real work even though no person labeled it. Saying
+ * "authored and labeled by a model" over a harvested stratum would be a false
+ * provenance claim on the one artifact whose purpose is provenance.
  */
 export const MACHINE_AUTHORITY_DISCLOSURE =
-  "Corpus authored and labeled by a model, not a person. No human authored, adjudicated, or attested this corpus. The signature attests byte integrity of the qualified corpus only; it is not a human release attestation." as const;
+  "Every label in this corpus was assigned by a model, not a person. No human authored, adjudicated, or attested it. Commands were either written by the authoring model or harvested from real local shell usage; `commandSource` records which, per category. The signature attests byte integrity of the qualified corpus only; it is not a human release attestation." as const;
+
+/**
+ * Where a category's commands came from. This says nothing about the labels,
+ * which are machine-assigned throughout.
+ */
+export type CommandSource = "model-authored" | "harvested-local-usage";
+
+export const COMMAND_SOURCES: readonly CommandSource[] = ["model-authored", "harvested-local-usage"];
 
 export interface MachineProvenance {
-  /** Model that wrote the commands and assigned the labels. */
+  /** Model that assigned every label, and that wrote the model-authored commands. */
   readonly authorModel: string;
   /** Variant requested on the authoring call. */
   readonly authorVariant: string;
@@ -43,6 +60,13 @@ export interface MachineProvenance {
   readonly authorVariantServed: "unverified";
   /** Classifier being measured. Must differ in vendor lineage from the author. */
   readonly classifierUnderTest: string;
+  /**
+   * Command origin per category. A harvested category draws its commands from
+   * shell history recorded in this checkout, so its operands name paths that
+   * actually exist and its shapes are ones somebody really ran. The labels are
+   * still machine-assigned.
+   */
+  readonly commandSource: Readonly<Record<FixtureCategory, CommandSource>>;
   /** No second labeler ran, so corpus label errors are not independently caught. */
   readonly independentLabelCheck: boolean;
   readonly humanAttestation: false;
@@ -214,6 +238,14 @@ export function validateMachineReleaseCorpus(
   if (corpus.provenance.disclosure !== MACHINE_AUTHORITY_DISCLOSURE) errors.push("machine authority disclosure is missing or altered");
   if (!corpus.provenance.authorModel || !corpus.provenance.classifierUnderTest) errors.push("machine provenance must name the author and the classifier under test");
   if (corpus.provenance.authorModel === corpus.provenance.classifierUnderTest) errors.push("machine author and classifier under test must differ");
+  // Command origin is declared per category and is signed with the rest of the
+  // provenance. A missing or unrecognized entry fails rather than defaulting,
+  // because the default a reader would assume is the one the disclosure would
+  // then misstate.
+  const declaredSources = corpus.provenance.commandSource as Record<string, unknown> | undefined;
+  if (!declaredSources || CATEGORIES.some((category) => !COMMAND_SOURCES.includes(declaredSources[category] as CommandSource))) {
+    errors.push("machine provenance must declare a known command source for every category");
+  }
 
   const counts = Object.fromEntries(CATEGORIES.map((category) => [category, corpus.release.filter((fixture) => fixture.category === category).length])) as Record<FixtureCategory, number>;
   for (const category of CATEGORIES) if (counts[category] < MINIMUMS[category]) errors.push(`release category minimum: ${category}`);

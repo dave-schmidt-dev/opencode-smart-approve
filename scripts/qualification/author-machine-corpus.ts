@@ -20,6 +20,7 @@ import { CATEGORIES, MINIMUMS, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE, can
 import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 import {
   MACHINE_AUTHORITY_DISCLOSURE,
+  type CommandSource,
   MACHINE_RELEASE_AUTHORITY,
   MACHINE_RELEASE_SCHEMA,
   MACHINE_RUBRIC_BINDING,
@@ -29,6 +30,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "./machine-authority";
+import { commandFamily, harvestBenignCommands } from "./harvest-usage";
 import { structuralKey } from "./structural-key";
 import type { PrivateReleaseFixture } from "./release-corpus";
 import { validateFrozenCandidateManifest } from "../classifier-gate";
@@ -40,7 +42,7 @@ const DEVELOPMENT_CORPUS = resolve(PROJECT_ROOT, "fixtures/eval/development.json
 export const AUTHOR_MODEL = "opencode-go/minimax-m3" as const;
 export const AUTHOR_VARIANT = "thinking" as const;
 export const CLASSIFIER_UNDER_TEST = "opencode-go/deepseek-v4-flash" as const;
-export const MACHINE_CORPUS_VERSION = "2026-08-14-machine-release-v3" as const;
+export const MACHINE_CORPUS_VERSION = "2026-08-14-machine-release-v3-harvested-benign" as const;
 
 /**
  * The reviewer only ever judges commands the deterministic layer forwards.
@@ -560,10 +562,29 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   const checkpointPath = options.checkpointPath ?? `${absolute}.checkpoint.json`;
   const checkpoint = readCheckpoint(checkpointPath);
 
-  // Categories are independent apart from the shared shape reservation, so they
-  // author concurrently. Wall clock then tracks the largest category instead of
-  // the sum of all six. The cap keeps concurrent provider sessions modest.
-  const byCategory = await mapWithConcurrency(CATEGORIES, 3, (category) =>
+  // Benign is harvested from real local usage rather than authored. The v2 draw
+  // failed benign false-manual 22/197 on a model-authored set of commands
+  // nobody runs, and no amount of re-prompting fixes that: the category is
+  // supposed to represent ordinary work, and only ordinary work represents it.
+  // Every fixture here was really executed, and the harvest keeps only the ones
+  // the reviewer prompt's own allow paragraph instructs the model to allow, so
+  // a manual verdict is a disagreement with the prompt rather than with a guess
+  // about what counts as harmless.
+  const benignNeeded = MINIMUMS.benign + 1;
+  const harvested = await harvestBenignCommands({ projectRoot: PROJECT_ROOT, avoidShapes, limit: benignNeeded });
+  if (harvested.length < benignNeeded) {
+    throw new Error(`benign harvest yielded ${harvested.length} of ${benignNeeded} needed; refusing to backfill with authored commands, which would make the declared command source false`);
+  }
+  for (const candidate of harvested) avoidShapes.add(candidate.shape);
+  onStatus(`benign: harvested ${harvested.length} real commands across ${new Set(harvested.map((entry) => commandFamily(entry.command))).size} command families`);
+  const benignCandidates: readonly AuthoredFixtureCandidate[] = harvested.map((entry) => ({ command: entry.command, reachesModel: true }));
+
+  // The remaining categories are independent apart from the shared shape
+  // reservation, so they author concurrently. Wall clock then tracks the
+  // largest category instead of the sum of all five. The cap keeps concurrent
+  // provider sessions modest.
+  const authoredCategories = CATEGORIES.filter((category) => category !== "benign");
+  const authored = await mapWithConcurrency(authoredCategories, 3, (category) =>
     // One extra per category funds the generalization stratum.
     authorCategory({
       category,
@@ -577,11 +598,13 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
         writeCheckpoint(checkpointPath, checkpoint);
       },
     }));
+  const byCategory = new Map<FixtureCategory, readonly AuthoredFixtureCandidate[]>([[ "benign", benignCandidates ]]);
+  authoredCategories.forEach((category, index) => byCategory.set(category, authored[index]!));
 
   const release: PrivateReleaseFixture[] = [];
   const generalization: PrivateReleaseFixture[] = [];
-  CATEGORIES.forEach((category, categoryIndex) => {
-    const candidates = byCategory[categoryIndex]!;
+  CATEGORIES.forEach((category) => {
+    const candidates = byCategory.get(category)!;
     const qualification = candidates.slice(0, MINIMUMS[category]);
     // One dangerous fixture per corpus exercises the observed error path,
     // matching the development draw's error-path accounting. It has to be a
@@ -604,6 +627,12 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
     authorVariant: AUTHOR_VARIANT,
     authorVariantServed: "unverified",
     classifierUnderTest: CLASSIFIER_UNDER_TEST,
+    // Benign commands were executed by real sessions and only labeled by the
+    // model. Every other category's commands were written by it. The labels are
+    // machine-assigned throughout, which is what the disclosure turns on.
+    commandSource: Object.fromEntries(
+      CATEGORIES.map((category) => [category, category === "benign" ? "harvested-local-usage" : "model-authored"]),
+    ) as Record<FixtureCategory, CommandSource>,
     independentLabelCheck: false,
     humanAttestation: false,
     disclosure: MACHINE_AUTHORITY_DISCLOSURE,
