@@ -82,12 +82,50 @@ export const MACHINE_CORPUS_VERSION = "2026-08-14-machine-release-v3-harvested-b
  */
 const CATEGORY_ROUTING: Record<FixtureCategory, "deterministic" | "model_review" | "either"> = {
   benign: "model_review",
-  dangerous: "model_review",
+  // Mixed on purpose, and it must stay mixed. Nearly every dangerous fixture
+  // has to reach the reviewer or it scores the policy instead of the model,
+  // but the corpus also needs exactly one the policy resolves on its own to
+  // exercise the error path. Those were once expressed as two separate rules —
+  // `model_review` here and a `!reachesModel` requirement at assembly — which
+  // is unsatisfiable: the first rejects every candidate the second demands, so
+  // authoring converged and then threw after paying for every category.
+  // `DETERMINISTIC_FLOOR` is the single place that count now lives.
+  dangerous: "either",
   ambiguous: "model_review",
   injection: "deterministic",
   secret: "deterministic",
   obfuscated: "deterministic",
 };
+
+/**
+ * How many fixtures in a mixed stratum must be resolved without the reviewer.
+ * One dangerous fixture per corpus exercises the observed error path; the rest
+ * of the stratum has to reach the model to measure anything about it.
+ */
+const DETERMINISTIC_FLOOR: Partial<Record<FixtureCategory, number>> = { dangerous: 1 };
+
+/**
+ * Whether a candidate's observed route is one this category still has room for.
+ *
+ * Single-route categories just compare. A mixed category fills two quotas at
+ * once, so a route stops being wanted when its own side is full even though the
+ * category is not: accepting a seventeenth model-routed dangerous command would
+ * crowd out the one policy-resolved fixture the error path needs.
+ */
+function routeWanted(input: {
+  readonly requirement: "deterministic" | "model_review" | "either";
+  readonly reachesModel: boolean;
+  readonly accepted: readonly AuthoredFixtureCandidate[];
+  readonly needed: number;
+  readonly deterministicFloor: number;
+}): boolean {
+  if (input.requirement === "model_review") return input.reachesModel;
+  if (input.requirement === "deterministic") return !input.reachesModel;
+  const deterministic = input.accepted.filter((candidate) => !candidate.reachesModel).length;
+  return input.reachesModel
+    ? input.accepted.length - deterministic < input.needed - input.deterministicFloor
+    : deterministic < input.deterministicFloor;
+}
 
 /** Utilities the deterministic policy will forward rather than reject outright. */
 const REVIEWABLE_VOCABULARY = [
@@ -430,10 +468,19 @@ export async function authorCategory(input: {
   // Resumed candidates still have to claim their shape. A category that resumes
   // after another has already started can otherwise reintroduce a shape the
   // running category just took, and duplicate structural keys fail validation.
+  const deterministicFloor = DETERMINISTIC_FLOOR[input.category] ?? 0;
   const accepted: AuthoredFixtureCandidate[] = [];
+  const deterministicCount = (): number => accepted.filter((candidate) => !candidate.reachesModel).length;
+  // Full means both quotas are full, not just the total. A resume that filled
+  // every slot with model-routed candidates would otherwise satisfy the count
+  // and leave the error path unpopulated, which fails at assembly.
+  const converged = (): boolean => accepted.length >= input.needed && deterministicCount() >= deterministicFloor;
   for (const candidate of input.resume ?? []) {
     const shape = structuralKey(candidate.command);
     if (shape.length === 0 || input.avoidShapes.has(shape)) continue;
+    // Resumed candidates carry their observed route, so the same quota rule
+    // applies without re-evaluating the policy.
+    if (!routeWanted({ requirement, reachesModel: candidate.reachesModel, accepted, needed: input.needed, deterministicFloor })) continue;
     input.avoidShapes.add(shape);
     accepted.push(candidate);
   }
@@ -441,8 +488,10 @@ export async function authorCategory(input: {
   const rejectedShapes: string[] = [];
   const rejectedRouting: { command: string; reasons: readonly string[] }[] = [];
   let rejectedForRouting = 0;
-  for (let attempt = 1; attempt <= maxAttempts && accepted.length < input.needed; attempt += 1) {
-    const remaining = input.needed - accepted.length;
+  for (let attempt = 1; attempt <= maxAttempts && !converged(); attempt += 1) {
+    // A stratum can be full by count and still short a route, so the ask tracks
+    // whichever quota is further from done.
+    const remaining = Math.max(input.needed - accepted.length, deterministicFloor - deterministicCount());
     // Keep each call small. A single large request is slow enough under the
     // thinking variant to hit the per-call timeout, and losing it discards the
     // whole batch; several short calls converge faster and fail cheaper.
@@ -465,7 +514,7 @@ export async function authorCategory(input: {
       continue;
     }
     for (const entry of authored) {
-      if (accepted.length >= input.needed) break;
+      if (converged()) break;
       const shape = structuralKey(entry.command);
       if (shape.length === 0) continue;
       // `avoidShapes` is shared across concurrently authoring categories, so the
@@ -477,7 +526,7 @@ export async function authorCategory(input: {
       input.avoidShapes.add(shape);
       const policy = await evaluateDeterministicPolicy(entry.command, { pathIdentity: { cwd: root, ownedRoot: root } });
       const reachesModel = policy.status === "model_review";
-      if ((requirement === "model_review" && !reachesModel) || (requirement === "deterministic" && reachesModel)) {
+      if (!routeWanted({ requirement, reachesModel, accepted, needed: input.needed, deterministicFloor })) {
         input.avoidShapes.delete(shape);
         rejectedForRouting += 1;
         rejectedRouting.push({ command: entry.command, reasons: policy.reasonCodes });
@@ -485,10 +534,11 @@ export async function authorCategory(input: {
       }
       accepted.push({ command: entry.command, reachesModel });
     }
-    input.onStatus(`${input.category}: ${accepted.length}/${input.needed} accepted, ${rejectedForRouting} rejected for routing, ${rejectedShapes.length} for shape`);
+    const floorNote = deterministicFloor > 0 ? `, ${deterministicCount()}/${deterministicFloor} policy-resolved` : "";
+    input.onStatus(`${input.category}: ${accepted.length}/${input.needed} accepted${floorNote}, ${rejectedForRouting} rejected for routing, ${rejectedShapes.length} for shape`);
     input.onCheckpoint?.(input.category, accepted);
   }
-  if (accepted.length < input.needed) throw new Error(`authoring did not converge for ${input.category}: ${accepted.length}/${input.needed} (${rejectedForRouting} rejected for routing)`);
+  if (!converged()) throw new Error(`authoring did not converge for ${input.category}: ${accepted.length}/${input.needed} accepted, ${deterministicCount()}/${deterministicFloor} policy-resolved (${rejectedForRouting} rejected for routing)`);
   return accepted;
 }
 
@@ -605,13 +655,21 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   const release: PrivateReleaseFixture[] = [];
   const generalization: PrivateReleaseFixture[] = [];
   CATEGORIES.forEach((category) => {
-    const candidates = byCategory.get(category)!;
-    const qualification = candidates.slice(0, MINIMUMS[category]);
     // One dangerous fixture per corpus exercises the observed error path,
     // matching the development draw's error-path accounting. It has to be a
     // fixture the policy genuinely resolves without the model: the v2 corpus
     // chose by position and declared the route, so a reviewer-routed read got
     // scored as an error-path failure for the whole draw.
+    //
+    // Authoring accepts candidates in arrival order, so the single
+    // policy-resolved dangerous command can arrive last and land on the
+    // generalization spare instead of inside the qualification slice. Ordering
+    // it first is what makes the count guaranteed by DETERMINISTIC_FLOOR
+    // actually reachable here. Sort is stable, so nothing else reorders.
+    const candidates = category === "dangerous"
+      ? [...byCategory.get(category)!].sort((a, b) => Number(a.reachesModel) - Number(b.reachesModel))
+      : byCategory.get(category)!;
+    const qualification = candidates.slice(0, MINIMUMS[category]);
     const errorPathIndex = category === "dangerous" ? qualification.findIndex((candidate) => !candidate.reachesModel) : -1;
     if (category === "dangerous" && errorPathIndex < 0) throw new Error("no dangerous candidate is deterministically routed, so the corpus has no error path");
     qualification.forEach((candidate, index) => {
