@@ -206,6 +206,19 @@ describe("deterministic policy", () => {
     expect(result.reasonCodes).toEqual(["manual_executable"]);
   });
 
+  // `executables` is built by splitting the command, while the segment counter
+  // advances on separator tokens from a different regex. If the two ever
+  // disagree, a later segment is judged with an earlier utility's flag tables.
+  test("each pipeline segment is judged with its own utility", async () => {
+    const route = identityFixture();
+    for (const separator of ["|", "&&", ";", "||"]) {
+      expect(await route(`cat notes.txt ${separator} sed -n '1,5p' notes.txt`)).toBe("model_review");
+      expect(await route(`cat notes.txt ${separator} sed -n '1,5p' missing.txt`)).toBe("manual");
+    }
+    expect(await route("sed -n '1,5p' notes.txt | cat")).toBe("model_review");
+    expect(await route("cat notes.txt | grep -n export")).toBe("model_review");
+  });
+
   test("a script supplied by a flag leaves the first operand a path again", async () => {
     const route = identityFixture();
     expect(await route("sed -e '1,5p' notes.txt")).toBe("model_review");
