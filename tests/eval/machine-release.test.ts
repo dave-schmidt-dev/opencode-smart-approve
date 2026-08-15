@@ -18,7 +18,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertQualificationRuntime, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertQualificationRuntime, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
 import { structuralKey } from "../../scripts/qualification/structural-key";
@@ -633,6 +633,19 @@ describe("authoring shape reservation", () => {
       }),
     ).rejects.toThrow("Model is disabled");
     expect(calls).toBe(1);
+  });
+
+  test("the draw names the candidate it runs against", () => {
+    // `author-machine-corpus.ts` takes the manifest as its first argument and
+    // binds the corpus to it; this run read a hardcoded default. A corpus
+    // authored against a re-frozen candidate failed the draw with "candidate
+    // manifest hashes are stale", naming a superseded file nobody chose.
+    expect(parseCandidateFlag(["a", "b"])).toEqual({ rest: ["a", "b"] });
+    expect(parseCandidateFlag(["--candidate", "m.json", "corpus", "ledger"])).toEqual({ candidatePath: "m.json", rest: ["corpus", "ledger"] });
+    expect(parseCandidateFlag(["corpus", "--candidate", "m.json", "ledger"])).toEqual({ candidatePath: "m.json", rest: ["corpus", "ledger"] });
+    expect(() => parseCandidateFlag(["corpus", "--candidate"])).toThrow("requires a path");
+    // A following flag is a missing value, not the path.
+    expect(() => parseCandidateFlag(["--candidate", "--attended"])).toThrow("requires a path");
   });
 
   test("command heads cover every pipeline segment", () => {

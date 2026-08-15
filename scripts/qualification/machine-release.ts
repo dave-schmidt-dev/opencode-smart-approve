@@ -424,6 +424,19 @@ export interface MachineReleaseOptions {
    * number, and copies the reasons into the aggregate. Omit for a first draw.
    */
   readonly priorConsumptions?: readonly { readonly consumptionNumber: number; readonly reason: string }[];
+  /**
+   * Candidate manifest this draw runs against, defaulting to the canonical path.
+   *
+   * `author-machine-corpus.ts` takes this as its first argument and binds the
+   * corpus to whichever manifest it was handed, while this run read the default
+   * path and nothing reconciled the two. A corpus authored against a re-frozen
+   * candidate therefore failed here with "candidate manifest hashes are stale",
+   * naming a superseded file the operator never chose. The pre-spend ordering
+   * meant custody survived, which is the guard working, but the run still could
+   * not proceed without either overwriting a historical artifact or moving the
+   * corpus. Both halves now name the manifest explicitly.
+   */
+  readonly candidatePath?: string;
   readonly onStatus?: (message: string) => void;
 }
 
@@ -434,7 +447,8 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // longer describes this checkout, while the ledger is still `available` — an
   // environment or staleness mistake must not consume a one-use custody.
   assertQualificationRuntime();
-  assertCandidateBinding();
+  const candidatePath = options.candidatePath ?? resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json");
+  assertCandidateBinding(undefined, candidatePath);
   const corpusBytes = readFileSync(resolve(options.corpusPath), "utf8");
   const corpusDigest = digestPrivateBytes(corpusBytes);
   // The commitment is machine-generated and labeled as such. It binds this run
@@ -469,7 +483,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // The corpus binding is only a well-formed digest to `validateMachineReleaseCorpus`.
   // Tie it to the candidate this run actually executes against, so the aggregate
   // cannot name a candidate that never produced it.
-  assertCandidateBinding(corpus.bindings.candidateManifestHash);
+  assertCandidateBinding(corpus.bindings.candidateManifestHash, candidatePath);
   // Every route in the corpus is a claim about this checkout's policy. Check the
   // claims against the policy before the draw, or a wrong one is scored as a
   // classifier result. Custody is already spent by here — the commands are
@@ -487,20 +501,43 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   return aggregate;
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<number> {
+/**
+ * Split `--candidate <path>` out of the argument list.
+ *
+ * Named, not positional: the candidate is optional, and it is the one argument
+ * an operator must not get wrong by miscounting. Separated from `main` so the
+ * stripping is testable without a provider, a runtime, or a custody spend.
+ */
+export function parseCandidateFlag(argv: readonly string[]): { readonly candidatePath?: string; readonly rest: readonly string[] } {
+  const index = argv.indexOf("--candidate");
+  if (index < 0) return { rest: argv };
+  const candidatePath = argv[index + 1];
+  if (candidatePath === undefined || candidatePath.startsWith("--")) throw new Error("--candidate requires a path");
+  return { candidatePath, rest: [...argv.slice(0, index), ...argv.slice(index + 2)] };
+}
+
+export async function main(rawArgv = process.argv.slice(2)): Promise<number> {
+  let candidatePath: string | undefined;
+  let argv: readonly string[];
+  try {
+    ({ candidatePath, rest: argv } = parseCandidateFlag(rawArgv));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
   const corpusPath = argv[0] ?? resolve(PROJECT_ROOT, "eval-results/machine-release-corpus.json");
   const ledgerPath = argv[1] ?? resolve(PROJECT_ROOT, "eval-results/machine-custody-ledger.json");
   const aggregatePath = argv[2] ?? resolve(PROJECT_ROOT, "eval-results/machine-release-aggregate.json");
   const generatedAt = argv[3];
   if (!generatedAt) {
-    console.error("usage: machine-release.ts <corpus> <ledger> <aggregate> <iso-timestamp> [prior-consumptions-json]");
+    console.error("usage: machine-release.ts [--candidate <manifest>] <corpus> <ledger> <aggregate> <iso-timestamp> [prior-consumptions-json]");
     return 1;
   }
   // Declaring a prior consumption is a disclosure, not a bypass: it raises this
   // run's recorded consumption number and stamps the reason into the aggregate.
   const priorConsumptions = argv[4] ? JSON.parse(argv[4]) as readonly { consumptionNumber: number; reason: string }[] : undefined;
   try {
-    const aggregate = await runMachineRelease({ corpusPath, ledgerPath, aggregatePath, generatedAt, priorConsumptions, onStatus: (message) => console.error(`[machine-release] ${message}`) });
+    const aggregate = await runMachineRelease({ corpusPath, ledgerPath, aggregatePath, generatedAt, priorConsumptions, candidatePath, onStatus: (message) => console.error(`[machine-release] ${message}`) });
     console.log(JSON.stringify({ terminal: aggregate.terminal, custodyNumber: aggregate.custodyNumber, observations: aggregate.observations, providerCalls: aggregate.providerCalls, criticalFalseApprovals: `${aggregate.criticalFalseApprovals}/${aggregate.criticalDenominator}`, benignFalseManual: `${aggregate.benignFalseManual}/${aggregate.benignDenominator}`, p95LatencyMs: aggregate.p95LatencyMs, failures: aggregate.failures }, null, 2));
     return aggregate.terminal === "machine-release-pass" ? 0 : 2;
   } catch (error) {
