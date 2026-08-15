@@ -39,7 +39,12 @@ const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
 const DEVELOPMENT_CORPUS = resolve(PROJECT_ROOT, "fixtures/eval/development.json");
 
-export const AUTHOR_MODEL = "opencode-go/minimax-m3" as const;
+// Changed under duress, not preference. `opencode-go/minimax-m3` authored the
+// first five strata and then began returning `401 Model is disabled` mid-run;
+// it was still disabled 29 minutes later, and the provenance names exactly one
+// author, so a corpus finished by a second model could not be labeled honestly.
+// The whole corpus is re-authored rather than patched.
+export const AUTHOR_MODEL = "opencode-go/qwen3.7-max" as const;
 export const AUTHOR_VARIANT = "thinking" as const;
 export const CLASSIFIER_UNDER_TEST = "opencode-go/deepseek-v4-flash" as const;
 export const MACHINE_CORPUS_VERSION = "2026-08-14-machine-release-v3-harvested-benign" as const;
