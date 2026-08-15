@@ -153,6 +153,78 @@ describe("deterministic policy", () => {
     })).status).toBe("manual");
   });
 
+  // A file-oriented executable used to force every non-flag operand through the
+  // path check, so `sed -n '1,5p' notes.txt` failed on its range expression and
+  // never reached the reviewer. On real usage that pattern alone accounted for
+  // the largest single block of manual verdicts.
+  const identityFixture = () => {
+    const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+    // Only these exist. Every other token throws, which is how the real lstat
+    // answers for a sed range, a grep pattern, or a find name filter.
+    const present = new Set(["/owned", "/owned/notes.txt", "/owned/src"]);
+    const metadata = {
+      lstat: async (path: string) => {
+        if (!present.has(path)) throw new Error("ENOENT");
+        return { uid, isSymbolicLink: () => false };
+      },
+      realpath: async (path: string) => {
+        if (!present.has(path)) throw new Error("ENOENT");
+        return path;
+      },
+    };
+    return async (command: string) => (await evaluateDeterministicPolicy(command, {
+      pathIdentity: { cwd: "/owned", ownedRoot: "/owned", ...metadata },
+    })).status;
+  };
+
+  test("a script, pattern, or flag value is not checked as a path operand", async () => {
+    const route = identityFixture();
+    expect(await route("sed -n '1,5p' notes.txt")).toBe("model_review");
+    expect(await route("grep -n export notes.txt")).toBe("model_review");
+    expect(await route("tail -n 50 notes.txt")).toBe("model_review");
+    expect(await route("head -n 20 notes.txt")).toBe("model_review");
+    expect(await route("sort -k 2 notes.txt")).toBe("model_review");
+    expect(await route("cut -d , -f 1 notes.txt")).toBe("model_review");
+    expect(await route("uniq -f 2 notes.txt")).toBe("model_review");
+  });
+
+  test("a name filter no longer decides find, which its own gate still holds", async () => {
+    const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+    const metadata = {
+      lstat: async (path: string) => {
+        if (path !== "/owned" && path !== "/owned/src") throw new Error("ENOENT");
+        return { uid, isSymbolicLink: () => false };
+      },
+      realpath: async (path: string) => path,
+    };
+    // find stays manual because it can execute, but the reason must now be that
+    // gate rather than a name filter mistaken for an unresolvable path.
+    const result = await evaluateDeterministicPolicy("find src -name '*.ts' -print", {
+      pathIdentity: { cwd: "/owned", ownedRoot: "/owned", ...metadata },
+    });
+    expect(result.status).toBe("manual");
+    expect(result.reasonCodes).toEqual(["manual_executable"]);
+  });
+
+  test("a script supplied by a flag leaves the first operand a path again", async () => {
+    const route = identityFixture();
+    expect(await route("sed -e '1,5p' notes.txt")).toBe("model_review");
+    expect(await route("sed -e '1,5p' missing.txt")).toBe("manual");
+  });
+
+  test("path-shaped tokens keep their identity check in every operand role", async () => {
+    const route = identityFixture();
+    // A sed script may itself name a file to write, and a flag whose value is a
+    // file is deliberately absent from the value table for exactly this reason.
+    expect(await route("sed -n 'w /tmp/out' notes.txt")).toBe("manual");
+    expect(await route("sed -f ../outside.sed notes.txt")).toBe("manual");
+    expect(await route("grep -f ../patterns.txt notes.txt")).toBe("manual");
+    expect(await route("sort -o /tmp/out notes.txt")).toBe("manual");
+    // An unverifiable write target stays manual whether or not it is new.
+    expect(await route("tee fresh.txt")).toBe("manual");
+    expect(await route("sed -n '1,5p' missing.txt")).toBe("manual");
+  });
+
   test("disabled model leaves every request manual", async () => {
     const result = await evaluateDeterministicPolicy("echo hello", {
       config: { model: { enabled: false }, policy: { rules: [] } },

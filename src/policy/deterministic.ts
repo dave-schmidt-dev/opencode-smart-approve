@@ -120,6 +120,35 @@ const PATH_COMMANDS = new Set([
 ]);
 
 /**
+ * Flags whose following token is the flag's own value rather than an operand.
+ * Only value kinds that are never a filename appear here — counts, field lists,
+ * delimiters, and match expressions. A flag whose value *is* a file (`sed -f`,
+ * `grep -f`, `sort -o`, `find -newer`) is deliberately absent so its value
+ * keeps its full path-identity check.
+ */
+const VALUE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["cut", new Set(["-b", "-c", "-d", "-f", "--bytes", "--characters", "--delimiter", "--fields"])],
+  ["find", new Set(["-name", "-iname", "-type", "-maxdepth", "-mindepth", "-perm", "-user", "-group", "-size", "-regex", "-iregex"])],
+  ["grep", new Set(["-A", "-B", "-C", "-e", "-m", "--max-count", "--regexp"])],
+  ["head", new Set(["-c", "-n", "--bytes", "--lines"])],
+  ["join", new Set(["-1", "-2", "-e", "-t"])],
+  ["sed", new Set(["-e", "--expression"])],
+  ["sort", new Set(["-k", "-t", "-S", "--key", "--field-separator"])],
+  ["tail", new Set(["-c", "-n", "--bytes", "--lines"])],
+  ["uniq", new Set(["-f", "-s", "-w"])],
+]);
+
+/**
+ * Utilities whose first operand is a script or pattern, not a path, together
+ * with the flags that supply it instead. `sed -n '1,5p' file` names one path;
+ * `sed -f script.sed file` names two, because the script came from a flag.
+ */
+const SCRIPT_OPERAND: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["grep", new Set(["-e", "-f", "--regexp", "--file"])],
+  ["sed", new Set(["-e", "-f", "--expression", "--file"])],
+]);
+
+/**
  * Check only path-shaped operands and redirection targets. This uses lstat and
  * realpath metadata, never readFile/open, and fails closed for identity gaps.
  */
@@ -133,11 +162,17 @@ async function classifyPathIdentity(
   let segment = 0;
   let seenCommand = false;
   let redirectPending = false;
+  let operandIndex = 0;
+  let scriptSupplied = false;
+  let valuePending = false;
   for (const token of tokens) {
     if (/^(?:\|\||&&|[|;&])$/.test(token)) {
       segment += 1;
       seenCommand = false;
       redirectPending = false;
+      operandIndex = 0;
+      scriptSupplied = false;
+      valuePending = false;
       continue;
     }
     if (/^(?:\d*[<>]{1,2}|&>)$/.test(token)) {
@@ -145,7 +180,18 @@ async function classifyPathIdentity(
       continue;
     }
     const value = unquote(token).replace(/^(?:\d*[<>]{1,2}|&>)/, "");
-    if (!value || value.startsWith("-")) continue;
+    if (!value) continue;
+    const executable = executables[segment];
+    if (value.startsWith("-")) {
+      // A flag can consume the next token as its value, and can also be where a
+      // utility's script or pattern came from, which leaves the first operand
+      // free to be a path again.
+      if (executable !== undefined) {
+        if (VALUE_FLAGS.get(executable)?.has(value)) valuePending = true;
+        if (SCRIPT_OPERAND.get(executable)?.has(value)) scriptSupplied = true;
+      }
+      continue;
+    }
     if (redirectPending) {
       pathTokens.add(value);
       redirectPending = false;
@@ -155,8 +201,16 @@ async function classifyPathIdentity(
       seenCommand = true;
       continue;
     }
-    const executable = executables[segment];
-    if (isPathToken(value) || (executable !== undefined && PATH_COMMANDS.has(executable))) pathTokens.add(value);
+    const consumed = valuePending;
+    valuePending = false;
+    const isScript = !consumed && operandIndex === 0 && !scriptSupplied && SCRIPT_OPERAND.has(executable ?? "");
+    if (!consumed) operandIndex += 1;
+    // A flag value and a leading script or pattern hold no path role, so the
+    // file-oriented executable no longer forces them into the identity check.
+    // They still face the shape test, which keeps `sed -n 'w /tmp/out' file`
+    // and `find . -newer ../ref` from escaping it.
+    const roleIsPath = !consumed && !isScript && executable !== undefined && PATH_COMMANDS.has(executable);
+    if (isPathToken(value) || roleIsPath) pathTokens.add(value);
   }
   // Bare redirect targets are path identity inputs even when the command has
   // no file-oriented executable (for example `echo value > output`).
