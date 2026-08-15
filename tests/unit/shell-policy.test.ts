@@ -241,7 +241,7 @@ describe("deterministic policy", () => {
   // Recognizing a read-only tool routes it to the reviewer; it never approves
   // it. Each entry was added on measured usage, so each needs a case proving it
   // routes and the gate still holds around it.
-  test("measured read-only tools reach the reviewer", async () => {
+  test("a read-only tool reaches the reviewer only when its reach is bounded by operands", async () => {
     const uid = typeof process.getuid === "function" ? process.getuid() : -1;
     const present = new Set(["/owned", "/owned/notes.txt", "/owned/data.json", "/owned/filter.jq"]);
     const metadata = {
@@ -261,13 +261,22 @@ describe("deterministic policy", () => {
     expect(await route("nl -ba notes.txt")).toBe("model_review");
     expect(await route("nl -v 1 notes.txt")).toBe("model_review");
     expect(await route("nl -ba notes.txt | sed -n '1,5p'")).toBe("model_review");
-    expect(await route("ps aux")).toBe("model_review");
-    expect(await route("pgrep -f node")).toBe("model_review");
     expect(await route("shasum -a 256 notes.txt")).toBe("model_review");
     // jq's filter sits in operand 0, the same position as sed's script.
     expect(await route("jq '.foo' data.json")).toBe("model_review");
     expect(await route("jq -r '.a.b' data.json")).toBe("model_review");
     expect(await route("jq -f filter.jq data.json")).toBe("model_review");
+    // Characterizes TASK-020, not a property worth keeping: a bare `.` filter is
+    // path-shaped, so the shape test claims it before the operand rule can
+    // exempt it. Flip this to model_review when the filter role is fixed.
+    expect(await route("jq '.' data.json")).toBe("manual");
+
+    // Reach has to be bounded by operands, which is a third test beyond "does
+    // not write" and "does not execute". `ps` and `pgrep` name no operand, so
+    // path identity has nothing to hold, and `ps aux` reports the arguments
+    // every other process was launched with.
+    expect(await route("ps aux")).toBe("manual");
+    expect(await route("pgrep -f node")).toBe("manual");
 
     // A tool that writes or executes is not recognized, and recognizing the
     // producer of a pipeline never covers an unknown consumer.

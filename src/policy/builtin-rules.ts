@@ -22,13 +22,20 @@ export interface BuiltinRule {
 /** Commands whose syntax is sufficiently ordinary for model review. */
 // Recognizing a binary does not approve it. A known command still faces every
 // other rule and, under INV-3, can only be granted by the model. Entries are
-// added on measured usage, and only when the tool has no flag that executes a
-// subprocess or writes a file: `plutil -convert` and `base64 -o` write, and
-// `osascript` executes, so none of them belong here.
+// added on measured usage, and a candidate has to clear three tests, not two:
+// no flag that executes a subprocess, no flag that writes a file, and a reach
+// bounded by its own operands. `osascript` executes; `plutil -convert` and
+// `base64 -o` write; `ps` and `pgrep` fail the third, which is subtler and is
+// why they were briefly listed here. They name no operand at all, so path
+// identity has nothing to check, and `ps aux` reports every process on the
+// machine including the arguments other tools were launched with — where
+// credentials are routinely passed. A reader whose scope is a path can be
+// bounded by the path rules already in place. A reader whose scope is the
+// machine cannot be bounded by anything this gate knows.
 export const KNOWN_COMMANDS = new Set([
   "awk", "basename", "cat", "cd", "cmp", "command", "cut", "date", "dirname", "echo", "env",
-  "false", "find", "git", "grep", "head", "join", "jq", "less", "ls", "mkdir", "nl", "pgrep",
-  "printf", "ps", "pwd", "readlink", "rg", "rm", "sed", "shasum", "sort", "stat", "tail",
+  "false", "find", "git", "grep", "head", "join", "jq", "less", "ls", "mkdir", "nl",
+  "printf", "pwd", "readlink", "rg", "rm", "sed", "shasum", "sort", "stat", "tail",
   "tee", "test", "tr", "true", "uniq", "wc", "which", "xargs", "realpath",
 ]);
 
