@@ -487,10 +487,13 @@ The exact-runtime candidate canary, public-synthetic custody/parity suites,
 offline/package/spec gates, and OpenCode 1.18.10 integration and contract
 canaries pass. The failure-only no-corpus terminal branch remains available for
 failed development draws; its older receipts are superseded by the current
-passing candidate. The release branch remains `release-disabled` because no
-fresh private corpus, independently bound adjudicator, or human custodian has
-been supplied; provider weights and served variant remain unattested, and
-`MODEL_APPROVAL_QUALIFIED` remains `false`.
+passing candidate. The release branch remains `release-disabled`, now on
+evidence rather than on authorship: the 2026-08-14 owner decision recorded under
+INV-9 accepts a `machine-adjudicated` corpus, so a fresh private human corpus,
+an independently bound adjudicator, and a human custodian are no longer
+preconditions. Two machine-adjudicated draws have been spent and the most recent
+returned `machine-release-fail`. Provider weights and served variant remain
+unattested, and `MODEL_APPROVAL_QUALIFIED` remains `false`.
 
 ### REQ-012: Compatibility and packaging
 

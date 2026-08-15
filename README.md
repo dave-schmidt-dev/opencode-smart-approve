@@ -28,15 +28,24 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 - `INVARIANTS.md` defines contracts every future change must preserve.
 - `ledger.yaml` records invariant gate coverage.
 
-The MVP implementation is present. The latest source-current development draw
-completed all 475 invocations as `development-pass`: 225 valid provider calls,
-475 classifier observations, and zero invalid runs. The private release branch
-has not been created because no fresh human-authored corpus,
-independently bound adjudicator, or human custodian is present. The plugin
-remains fail-closed with model-backed automatic approval disabled by an
-immutable release gate. The source-current candidate is
-`d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5` with a
-2.799-second p95 latency.
+The MVP implementation is present. The plugin remains fail-closed, with
+model-backed automatic approval disabled by an immutable release gate.
+
+The last development draw completed all 475 invocations as `development-pass`:
+225 valid provider calls, 475 classifier observations, zero invalid runs, and a
+2.799-second p95 latency. That receipt is bound to candidate
+`d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`, which is no
+longer source-current — routing and policy changed after it was frozen, and
+`--validate-candidate` now reports it stale. The current valid freeze is
+`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773`; the
+development draw has not been re-run against it.
+
+Release is blocked on classifier evidence, not on authorship. An owner decision
+of 2026-08-14 (INV-9) accepts a `machine-adjudicated` corpus for release so long
+as the artifact honestly names the authority that produced it, so a
+human-authored corpus, an independently bound human adjudicator, and a human
+custodian are no longer preconditions. Two machine-adjudicated release draws
+have been spent, and the most recent returned `machine-release-fail`.
 
 The six identity-specific replan micro-plans are static, disabled-default
 guidance for blocked shell attempts; their presence is not qualification
@@ -65,16 +74,18 @@ global OpenCode plugin loader for evaluation; keep native `bash: ask` enabled.
 `model.enabled=true` cannot enable automatic approvals in this release. Remove the
 loader entry to restore stock OpenCode; no session-data edit is required. OpenCode
 1.18.10 is the tested compatibility target, not a model qualification. DeepSeek V4
-Flash remains a candidate reviewer until the attended private release branch and
-human custody attestation pass.
+Flash remains a candidate reviewer until an attended release draw passes.
 
 ## Development verification
 
 The disposable OpenCode checks use the pinned local `opencode-ai@1.18.10` binary
 by default. They isolate config, data, state, and cache under a temporary root and
 fail closed when an explicit `OPENCODE_BIN` reports any other version. Run the
-offline checks with `bun run check`; run the attended exact-runtime checks with
-`bun run test:e2e`. The separate attended `bun run qualify:development` command
+offline checks with `bun run check` (typecheck, the offline suite, and the
+package check); run the attended exact-runtime checks with `bun run test:e2e`.
+`bun run spec:guard` verifies that `SPEC.md`, `TRACEABILITY.md`, and
+`INVARIANTS.md` still agree on requirements, tasks, and invariants.
+The separate attended `bun run qualify:development` command
 produces the source-current aggregate development report but cannot enable
 approval. Private release evaluation requires the separate human-custodian
 workflow and is not run by the development command.
@@ -107,6 +118,22 @@ heartbeat; rejects drafts; and writes only a strict aggregate. It requires an
 in-process qualification callback and never manufactures human roles or a
 release attestation.
 
+The machine-adjudicated path is the one INV-9 permits for release, and it is
+separate from the human wrapper above. `scripts/qualification/harvest-usage.ts`
+sources the benign stratum from real local agent session history rather than
+model invention, keeping only commands the reviewer prompt's own allow paragraph
+instructs the model to allow. `scripts/qualification/author-machine-corpus.ts`
+authors the remaining strata against a named candidate manifest and writes the
+corpus bound to it. `scripts/qualification/machine-release.ts` draws it once,
+taking an optional `--candidate <manifest>` so both halves name the same
+candidate; it spends custody before opening private input, so an interrupted run
+cannot be re-drawn for a better result. `scripts/qualification/machine-authority.ts`
+holds the authority labels and the signed provenance, including `commandSource`,
+which records per-stratum whether a command was authored or harvested.
+`scripts/qualification/measure-routing.ts` reports what share of real executions
+reach the reviewer at all. None of these enables model approval; a passing draw
+is a precondition for flipping the gate, not the flip itself.
+
 The coordinator-backed parity harness is an offline contract check:
 `bun test tests/eval/reviewer-contract-parity.test.ts`. It compares the
 production registration and reviewer payload with the evaluation contract,
@@ -115,10 +142,11 @@ without changing this checkout. It is contract evidence only; it does not
 qualify or enable model-backed approval.
 
 The current release checkpoint is recorded in
-`eval-results/qualification-release-gate.md`. The development result is an
-aggregate `development-pass` receipt; release remains disabled because the
-fresh human corpus, independent labels, custodian receipt, and countersignature
-are absent.
+`eval-results/qualification-release-gate.md`. `eval-results/` is not committed,
+so a fresh clone carries the commands that produce these artifacts but none of
+the artifacts themselves. The development result is an aggregate
+`development-pass` receipt; release remains disabled because no release draw has
+returned `machine-release-pass`.
 
 ## Verified OpenCode boundary
 
