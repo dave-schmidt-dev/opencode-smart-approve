@@ -114,9 +114,13 @@ function containsSensitivePathToken(command: string): boolean {
   return /(?:^|[/\\\s"'=])(?:\.env(?:\.[^\s/;&|]*)?|\.npmrc|\.pypirc|\.netrc|credentials?(?:\.[^\s/;&|]*)?|secrets?(?:\.[^\s/;&|]*)?|.*(?:keychain|private.key|id_(?:rsa|dsa|ecdsa|ed25519))(?:\.[^\s/;&|]*)?)(?=$|[\s"';&|])/i.test(command);
 }
 
+// Utilities whose bare operands name files, so a bare `README.md` is checked
+// even though it is not path-shaped. `ps` and `pgrep` are deliberately absent:
+// they take no file operand, so nothing of theirs should be resolved as one.
 const PATH_COMMANDS = new Set([
-  "basename", "cat", "cd", "cmp", "cut", "dirname", "find", "grep", "head", "join", "less", "ls",
-  "mkdir", "readlink", "realpath", "rm", "sed", "sort", "stat", "tail", "tee", "test", "uniq", "wc",
+  "basename", "cat", "cd", "cmp", "cut", "dirname", "find", "grep", "head", "join", "jq", "less",
+  "ls", "mkdir", "nl", "readlink", "realpath", "rm", "sed", "shasum", "sort", "stat", "tail",
+  "tee", "test", "uniq", "wc",
 ]);
 
 /**
@@ -132,7 +136,10 @@ const VALUE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["grep", new Set(["-A", "-B", "-C", "-e", "-m", "--max-count", "--regexp"])],
   ["head", new Set(["-c", "-n", "--bytes", "--lines"])],
   ["join", new Set(["-1", "-2", "-e", "-t"])],
+  ["jq", new Set(["--indent"])],
+  ["nl", new Set(["-b", "-d", "-f", "-h", "-i", "-l", "-n", "-s", "-v", "-w"])],
   ["sed", new Set(["-e", "--expression"])],
+  ["shasum", new Set(["-a"])],
   ["sort", new Set(["-k", "-t", "-S", "--key", "--field-separator"])],
   ["tail", new Set(["-c", "-n", "--bytes", "--lines"])],
   ["uniq", new Set(["-f", "-s", "-w"])],
@@ -145,6 +152,7 @@ const VALUE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  */
 const SCRIPT_OPERAND: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["grep", new Set(["-e", "-f", "--regexp", "--file"])],
+  ["jq", new Set(["-f", "--from-file"])],
   ["sed", new Set(["-e", "-f", "--expression", "--file"])],
 ]);
 

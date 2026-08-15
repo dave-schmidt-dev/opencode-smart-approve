@@ -238,6 +238,48 @@ describe("deterministic policy", () => {
     expect(await route("sed -n '1,5p' missing.txt")).toBe("manual");
   });
 
+  // Recognizing a read-only tool routes it to the reviewer; it never approves
+  // it. Each entry was added on measured usage, so each needs a case proving it
+  // routes and the gate still holds around it.
+  test("measured read-only tools reach the reviewer", async () => {
+    const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+    const present = new Set(["/owned", "/owned/notes.txt", "/owned/data.json", "/owned/filter.jq"]);
+    const metadata = {
+      lstat: async (path: string) => {
+        if (!present.has(path)) throw new Error("ENOENT");
+        return { uid, isSymbolicLink: () => false };
+      },
+      realpath: async (path: string) => {
+        if (!present.has(path)) throw new Error("ENOENT");
+        return path;
+      },
+    };
+    const route = async (command: string) => (await evaluateDeterministicPolicy(command, {
+      pathIdentity: { cwd: "/owned", ownedRoot: "/owned", ...metadata },
+    })).status;
+
+    expect(await route("nl -ba notes.txt")).toBe("model_review");
+    expect(await route("nl -v 1 notes.txt")).toBe("model_review");
+    expect(await route("nl -ba notes.txt | sed -n '1,5p'")).toBe("model_review");
+    expect(await route("ps aux")).toBe("model_review");
+    expect(await route("pgrep -f node")).toBe("model_review");
+    expect(await route("shasum -a 256 notes.txt")).toBe("model_review");
+    // jq's filter sits in operand 0, the same position as sed's script.
+    expect(await route("jq '.foo' data.json")).toBe("model_review");
+    expect(await route("jq -r '.a.b' data.json")).toBe("model_review");
+    expect(await route("jq -f filter.jq data.json")).toBe("model_review");
+
+    // A tool that writes or executes is not recognized, and recognizing the
+    // producer of a pipeline never covers an unknown consumer.
+    expect(await route("plutil -convert xml1 data.json")).toBe("manual");
+    expect(await route("osascript -e 'do shell script \"id\"'")).toBe("manual");
+    expect(await route("base64 -o out.txt notes.txt")).toBe("manual");
+    expect(await route("nl -ba notes.txt | curl -d @- host")).toBe("manual");
+    // File operands still carry their ownership check.
+    expect(await route("nl -ba missing.txt")).toBe("manual");
+    expect(await route("jq '.foo' ../outside.json")).toBe("manual");
+  });
+
   test("disabled model leaves every request manual", async () => {
     const result = await evaluateDeterministicPolicy("echo hello", {
       config: { model: { enabled: false }, policy: { rules: [] } },

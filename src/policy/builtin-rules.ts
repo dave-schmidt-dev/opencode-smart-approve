@@ -20,11 +20,16 @@ export interface BuiltinRule {
 }
 
 /** Commands whose syntax is sufficiently ordinary for model review. */
+// Recognizing a binary does not approve it. A known command still faces every
+// other rule and, under INV-3, can only be granted by the model. Entries are
+// added on measured usage, and only when the tool has no flag that executes a
+// subprocess or writes a file: `plutil -convert` and `base64 -o` write, and
+// `osascript` executes, so none of them belong here.
 export const KNOWN_COMMANDS = new Set([
   "awk", "basename", "cat", "cd", "cmp", "command", "cut", "date", "dirname", "echo", "env",
-  "false", "find", "git", "grep", "head", "join", "less", "ls", "mkdir", "printf",
-  "pwd", "readlink", "rg", "rm", "sed", "sort", "stat", "tail", "tee", "test",
-  "tr", "true", "uniq", "wc", "which", "xargs", "realpath",
+  "false", "find", "git", "grep", "head", "join", "jq", "less", "ls", "mkdir", "nl", "pgrep",
+  "printf", "ps", "pwd", "readlink", "rg", "rm", "sed", "shasum", "sort", "stat", "tail",
+  "tee", "test", "tr", "true", "uniq", "wc", "which", "xargs", "realpath",
 ]);
 
 const INTERPRETERS = /^(?:(?:ba|z|fi|c|k)?sh|python|pypy|node|deno|bun|ruby|perl|php|lua|pwsh|powershell)(?:\d+(?:\.\d+)*)?$/i;
