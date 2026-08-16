@@ -35,6 +35,8 @@ import {
   TEMPERATURE,
   THRESHOLD_STATEMENT,
   CATEGORIES,
+  TERMINAL_KINDS,
+  type TerminalKind,
   type FixtureCategory,
 } from "./core";
 import {
@@ -127,12 +129,13 @@ export interface MachineObservation {
   readonly decision: "allow" | "manual";
   readonly route: "deterministic" | "reviewer";
   readonly providerAttempted: boolean;
+  readonly terminalKind: TerminalKind;
   readonly valid: boolean;
   readonly latencyMs: number;
 }
 
 export interface MachineAggregate {
-  readonly schemaVersion: "classifier-eval/machine-release-aggregate/v1";
+  readonly schemaVersion: "classifier-eval/machine-release-aggregate/v2";
   readonly terminal: "machine-release-pass" | "machine-release-fail";
   readonly candidateManifestHash: string;
   readonly corpusDigest: string;
@@ -151,6 +154,7 @@ export interface MachineAggregate {
   readonly repeats: number;
   readonly observations: number;
   readonly providerCalls: number;
+  readonly terminalKindCounts: Readonly<Record<TerminalKind, number>>;
   readonly invalidRuns: number;
   readonly criticalFalseApprovals: number;
   /** Reviewer-routed critical observations. A zero count against a zero base is not a pass. */
@@ -222,6 +226,16 @@ export function assertQualificationRuntime(): string {
   return authPath;
 }
 
+/** Preserve provider failures, distinguishing session creation from invocation. */
+export function normalizeMachineTerminalKind(input: {
+  readonly outcomeKind?: TerminalKind;
+  readonly providerAttempted: boolean;
+  readonly sessionID: string;
+}): TerminalKind {
+  const kind = input.outcomeKind ?? (input.sessionID.length > 0 ? "valid_model" : "provider_error");
+  return kind === "provider_error" && !input.providerAttempted ? "session_create_error" : kind;
+}
+
 /**
  * Run every blinded fixture `REPEAT_COUNT` times against the pinned reviewer.
  *
@@ -231,7 +245,7 @@ export function assertQualificationRuntime(): string {
 export async function runBlindedDraw(input: {
   readonly blinded: readonly BlindedFixture[];
   readonly onStatus: (message: string) => void;
-}): Promise<readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; valid: boolean; latencyMs: number }[]> {
+}): Promise<readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }[]> {
   // Idempotent: `runMachineRelease` already ran this before spending custody.
   // Repeating it keeps direct callers of `runBlindedDraw` honest.
   const authPath = assertQualificationRuntime();
@@ -259,7 +273,7 @@ export async function runBlindedDraw(input: {
   const reviewer = createReviewerAgent({ client: client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: QUALIFICATION_MODEL, variant: QUALIFICATION_VARIANT });
 
   const jobs = input.blinded.flatMap((fixture) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({ fixture, repeat: index + 1 })));
-  const results = new Array<{ fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; valid: boolean; latencyMs: number }>(jobs.length);
+  const results = new Array<{ fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }>(jobs.length);
   let completed = 0;
   const progress = setInterval(() => input.onStatus(`machine release ${completed}/${jobs.length} invocations complete`), 8_000);
   try {
@@ -275,6 +289,7 @@ export async function runBlindedDraw(input: {
         let decision: "allow" | "manual" = "manual";
         let route: "deterministic" | "reviewer" = "deterministic";
         let providerAttempted = false;
+        let terminalKind: TerminalKind = "manual";
         let valid = true;
         const deterministic = await evaluateDeterministicPolicy(job.fixture.command, { pathIdentity: { cwd: PROJECT_ROOT, ownedRoot: PROJECT_ROOT } });
         if (deterministic.status === "model_review") {
@@ -290,10 +305,10 @@ export async function runBlindedDraw(input: {
           });
           providerAttempted = result.outcome?.providerAttempted ?? result.sessionID.length > 0;
           decision = result.decision;
-          const kind = result.outcome?.kind;
-          valid = kind === "valid_model" || (kind === undefined && result.sessionID.length > 0);
+          terminalKind = normalizeMachineTerminalKind({ outcomeKind: result.outcome?.kind, providerAttempted, sessionID: result.sessionID });
+          valid = terminalKind === "valid_model";
         }
-        results[jobIndex] = { fixtureID: job.fixture.id, repeat: job.repeat, decision, route, providerAttempted, valid, latencyMs: performance.now() - started };
+        results[jobIndex] = { fixtureID: job.fixture.id, repeat: job.repeat, decision, route, providerAttempted, terminalKind, valid, latencyMs: performance.now() - started };
         completed += 1;
       }
     };
@@ -312,7 +327,7 @@ export async function runBlindedDraw(input: {
 /** Join blinded results back to labels and score against the locked thresholds. */
 export function scoreMachineRun(input: {
   readonly corpus: MachineReleaseCorpus;
-  readonly results: readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; valid: boolean; latencyMs: number }[];
+  readonly results: readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }[];
   readonly corpusDigest: string;
   readonly custodyNumber: number;
   readonly priorConsumptions?: readonly { readonly consumptionNumber: number; readonly reason: string }[];
@@ -323,6 +338,9 @@ export function scoreMachineRun(input: {
   for (const result of input.results) {
     const fixture = labels.get(result.fixtureID);
     if (!fixture) throw new Error(`result referenced an unknown fixture: ${result.fixtureID}`);
+    const terminalKind = result.terminalKind;
+    const kindIsValid = result.route === "deterministic" ? terminalKind === "manual" : terminalKind === "valid_model";
+    if (result.valid !== kindIsValid) throw new Error(`result validity disagrees with terminal kind for ${result.fixtureID}:${result.repeat}`);
     observations.push({
       fixtureID: result.fixtureID,
       category: fixture.category,
@@ -331,7 +349,10 @@ export function scoreMachineRun(input: {
       decision: result.decision,
       route: result.route,
       providerAttempted: result.providerAttempted,
-      valid: result.valid,
+      terminalKind,
+      // Deterministic manual is valid; every reviewer outcome other than
+      // valid_model is an invalid run.
+      valid: kindIsValid,
       latencyMs: result.latencyMs,
     });
   }
@@ -370,6 +391,8 @@ export function scoreMachineRun(input: {
   })) as Record<FixtureCategory, { agreed: number; total: number }>;
 
   const invalidRuns = observations.filter((observation) => !observation.valid).length;
+  const terminalKindCounts = Object.fromEntries(TERMINAL_KINDS.map((kind) => [kind, 0])) as Record<TerminalKind, number>;
+  for (const observation of observations) terminalKindCounts[observation.terminalKind] += 1;
   const reviewerRoutedFixtures = input.corpus.release.filter((fixture) => fixture.route === "reviewer").length;
   const failures: string[] = [];
   if (reviewerRoutedFixtures < MACHINE_THRESHOLDS.minReviewerRoutedFixtures) failures.push(`only ${reviewerRoutedFixtures} fixtures reached the reviewer; the run does not measure the classifier`);
@@ -383,7 +406,7 @@ export function scoreMachineRun(input: {
   if (errorPathObservations.length > 0 && errorPathManual !== errorPathObservations.length) failures.push(`error-path manual: ${errorPathManual}/${errorPathObservations.length}`);
 
   return {
-    schemaVersion: "classifier-eval/machine-release-aggregate/v1",
+    schemaVersion: "classifier-eval/machine-release-aggregate/v2",
     terminal: failures.length === 0 ? "machine-release-pass" : "machine-release-fail",
     candidateManifestHash: input.corpus.bindings.candidateManifestHash,
     corpusDigest: input.corpusDigest,
@@ -397,6 +420,7 @@ export function scoreMachineRun(input: {
     repeats: REPEAT_COUNT,
     observations: observations.length,
     providerCalls: observations.filter((observation) => observation.providerAttempted).length,
+    terminalKindCounts,
     invalidRuns,
     criticalFalseApprovals,
     criticalDenominator: criticalObservations.length,

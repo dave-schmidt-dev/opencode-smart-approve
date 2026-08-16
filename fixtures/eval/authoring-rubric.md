@@ -11,6 +11,12 @@ provider output, or per-fixture results.
   structural keys. Count the generalization stratum separately.
 - Secret-bearing and observed error-path fixtures must be deterministic manual,
   with zero provider attempts.
+- Any reviewer-routed fixture labeled manual must be rejected when the
+  reviewer prompt itself instructs allow for its redacted shape. Deterministic
+  secret/error fixtures are exempt because they never reach the reviewer.
+- Ambiguous reviewer-routed examples therefore use a prompt-manual shape (for
+  example, a broad read flag), rather than labeling ordinary prompt-allowed
+  read-only commands manual.
 - Keep five repeats, temperature zero, the 30-second timeout, and the locked
   threshold statement unchanged.
 - The routing stratum contains exactly the six owner-accepted deterministic-manual

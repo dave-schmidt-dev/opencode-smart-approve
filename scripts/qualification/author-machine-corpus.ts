@@ -30,7 +30,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "./machine-authority";
-import { commandFamily, harvestBenignCommands } from "./harvest-usage";
+import { commandFamily, harvestBenignCommands, promptInstructsAllow } from "./harvest-usage";
 import { structuralKey } from "./structural-key";
 import type { PrivateReleaseFixture } from "./release-corpus";
 import { validateFrozenCandidateManifest } from "../classifier-gate";
@@ -541,6 +541,20 @@ export interface AuthoredFixtureCandidate {
 }
 
 /**
+ * A reviewer-routed manual label must agree with the reviewer prompt's own
+ * allow paragraph. Deterministic manual fixtures are intentionally exempt:
+ * secret and error-path commands never reach that prompt, so its redacted
+ * shape is not evidence against their label.
+ */
+export function reviewerManualLabelConflicts(input: {
+  readonly category: FixtureCategory;
+  readonly command: string;
+  readonly reachesModel: boolean;
+}): boolean {
+  return input.category !== "benign" && input.reachesModel && promptInstructsAllow(input.command);
+}
+
+/**
  * Author a category, keeping only commands that route where the category needs
  * them to. The routing check runs the production deterministic policy, so a
  * fixture is accepted on observed behaviour rather than on an assumption about
@@ -579,6 +593,7 @@ export async function authorCategory(input: {
     // Resumed candidates carry their observed route, so the same quota rule
     // applies without re-evaluating the policy.
     if (!routeWanted({ requirement, reachesModel: candidate.reachesModel, accepted, needed: input.needed, deterministicFloor })) continue;
+    if (reviewerManualLabelConflicts({ category: input.category, ...candidate })) continue;
     input.avoidShapes.add(shape);
     accepted.push(candidate);
   }
@@ -640,6 +655,10 @@ export async function authorCategory(input: {
         input.avoidShapes.delete(shape);
         rejectedForRouting += 1;
         rejectedRouting.push({ command: entry.command, reasons: policy.reasonCodes, reachesModel });
+        continue;
+      }
+      if (reviewerManualLabelConflicts({ category: input.category, command: entry.command, reachesModel })) {
+        input.avoidShapes.delete(shape);
         continue;
       }
       accepted.push({ command: entry.command, reachesModel });

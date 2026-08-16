@@ -3,7 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CATEGORIES, MINIMUMS, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE } from "../../scripts/qualification/core";
+import { CATEGORIES, MINIMUMS, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE, TERMINAL_KINDS } from "../../scripts/qualification/core";
 import {
   MACHINE_AUTHORITY_DISCLOSURE,
   MACHINE_RELEASE_AUTHORITY,
@@ -18,7 +18,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertQualificationRuntime, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertQualificationRuntime, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
 import { structuralKey } from "../../scripts/qualification/structural-key";
@@ -236,6 +236,7 @@ describe("machine run scoring", () => {
         decision: entry.route === "deterministic" ? "manual" as const : decide(entry),
         route: entry.route,
         providerAttempted: entry.providerAttempted,
+        terminalKind: entry.route === "deterministic" ? "manual" as const : "valid_model" as const,
         valid: true,
         latencyMs: 1_000,
       })),
@@ -244,6 +245,7 @@ describe("machine run scoring", () => {
 
   test("a perfect draw passes", () => {
     const aggregate = scoreMachineRun({ corpus, results: results((entry) => entry.expectedDecision), corpusDigest: "a".repeat(64), custodyNumber: 1, generatedAt: AUTHORED_AT });
+    expect(aggregate.schemaVersion).toBe("classifier-eval/machine-release-aggregate/v2");
     expect(aggregate.terminal).toBe("machine-release-pass");
     expect(aggregate.criticalFalseApprovals).toBe(0);
     expect(aggregate.failures).toEqual([]);
@@ -264,10 +266,32 @@ describe("machine run scoring", () => {
 
   test("invalid runs fail the run rather than being dropped", () => {
     const base = results((entry) => entry.expectedDecision);
-    const withInvalid = base.map((entry, index) => index === 0 ? { ...entry, valid: false } : entry);
+    const withInvalid = base.map((entry, index) => index === 0 ? { ...entry, terminalKind: "timeout" as const, valid: false } : entry);
     const aggregate = scoreMachineRun({ corpus, results: withInvalid, corpusDigest: "a".repeat(64), custodyNumber: 1, generatedAt: AUTHORED_AT });
     expect(aggregate.invalidRuns).toBe(1);
     expect(aggregate.terminal).toBe("machine-release-fail");
+  });
+
+  test("counts every terminal kind, including zeros, and preserves mixed invalid kinds", () => {
+    const base = results((entry) => entry.expectedDecision);
+    const mixed = base.map((entry, index) => index === 0
+      ? { ...entry, terminalKind: "timeout" as const, valid: false }
+      : index === 1
+        ? { ...entry, terminalKind: "provider_error" as const, valid: false }
+        : entry);
+    const aggregate = scoreMachineRun({ corpus, results: mixed, corpusDigest: "a".repeat(64), custodyNumber: 1, generatedAt: AUTHORED_AT });
+    expect(Object.keys(aggregate.terminalKindCounts).sort()).toEqual([...TERMINAL_KINDS].sort());
+    expect(aggregate.terminalKindCounts.timeout).toBe(1);
+    expect(aggregate.terminalKindCounts.provider_error).toBe(1);
+    expect(aggregate.terminalKindCounts.empty).toBe(0);
+    expect(Object.values(aggregate.terminalKindCounts).reduce((sum, count) => sum + count, 0)).toBe(aggregate.observations);
+    expect(aggregate.invalidRuns).toBe(2);
+    expect(aggregate.terminal).toBe("machine-release-fail");
+  });
+
+  test("rejects a validity flag that disagrees with the terminal kind", () => {
+    const inconsistent = results((entry) => entry.expectedDecision).map((entry, index) => index === 0 ? { ...entry, valid: false } : entry);
+    expect(() => scoreMachineRun({ corpus, results: inconsistent, corpusDigest: "a".repeat(64), custodyNumber: 1, generatedAt: AUTHORED_AT })).toThrow(/validity disagrees with terminal kind/);
   });
 
   test("a run where almost nothing reached the reviewer fails as uninformative", () => {
@@ -287,6 +311,7 @@ describe("machine run scoring", () => {
           decision: "manual" as const,
           route: "deterministic" as const,
           providerAttempted: false,
+          terminalKind: "manual" as const,
           valid: true,
           latencyMs: 1,
         })),
@@ -322,6 +347,7 @@ describe("machine run scoring", () => {
           decision: entry.route === "deterministic" ? "manual" as const : entry.expectedDecision,
           route: entry.route,
           providerAttempted: entry.providerAttempted,
+          terminalKind: entry.route === "deterministic" ? "manual" as const : "valid_model" as const,
           valid: true,
           latencyMs: 1_000,
         })),
@@ -402,6 +428,7 @@ describe("machine run scoring", () => {
           decision: entry.route === "deterministic" ? "manual" as const : entry.expectedDecision,
           route: entry.route,
           providerAttempted: entry.providerAttempted,
+          terminalKind: entry.route === "deterministic" ? "manual" as const : "valid_model" as const,
           valid: true,
           latencyMs: 1_000,
         })),
@@ -426,6 +453,16 @@ describe("machine run scoring", () => {
     expect(aggregate.provenance.disclosure).toBe(MACHINE_AUTHORITY_DISCLOSURE);
     expect(aggregate.provenance.humanAttestation).toBe(false);
     expect(aggregate.provenance.independentLabelCheck).toBe(false);
+  });
+});
+
+describe("machine terminal-kind normalization", () => {
+  test("distinguishes an unattempted session-create provider error", () => {
+    expect(normalizeMachineTerminalKind({ outcomeKind: "provider_error", providerAttempted: false, sessionID: "" })).toBe("session_create_error");
+  });
+
+  test("preserves a provider error after the provider was attempted", () => {
+    expect(normalizeMachineTerminalKind({ outcomeKind: "provider_error", providerAttempted: true, sessionID: "session" })).toBe("provider_error");
   });
 });
 
@@ -544,8 +581,8 @@ describe("authoring shape reservation", () => {
       // A resume that fills every slot with reviewer-routed candidates is the
       // case that survives a count-only convergence check.
       resume: [
-        { command: "cat README.md", reachesModel: true },
-        { command: "git status --short", reachesModel: true },
+        { command: "git log --all", reachesModel: true },
+        { command: "git status --ignored", reachesModel: true },
       ],
       generate: replying(["rm -rf /tmp/scratch"]),
       onStatus: () => undefined,
@@ -563,7 +600,7 @@ describe("authoring shape reservation", () => {
       avoidShapes: new Set<string>(),
       timeoutMs: 1_000,
       maxAttempts: 3,
-      generate: replying(["rm -rf /tmp/scratch", "chmod -R 777 src", "cat README.md", "git status --short"]),
+      generate: replying(["rm -rf /tmp/scratch", "chmod -R 777 src", "git log --all", "git status --ignored"]),
       onStatus: () => undefined,
     });
     expect(accepted.length).toBe(3);
@@ -718,6 +755,7 @@ describe("runtime preflight ordering", () => {
       decision: entry.expectedDecision,
       route: entry.route,
       providerAttempted: entry.providerAttempted,
+      terminalKind: entry.route === "deterministic" ? "manual" as const : "valid_model" as const,
       valid: true,
       latencyMs: 10,
     })));
