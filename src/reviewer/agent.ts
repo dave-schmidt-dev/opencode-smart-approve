@@ -16,9 +16,10 @@ import {
   rejectReviewerPermission,
   type ReviewerSessionClient,
 } from "./client";
+import { ACTIVE_PRODUCTION_PROFILE, profileForModel } from "./model-profile";
 
-export const REVIEWER_MODEL = "opencode-go/deepseek-v4-flash" as const;
-export const REVIEWER_VARIANT = "max" as const;
+export const REVIEWER_MODEL = ACTIVE_PRODUCTION_PROFILE.model;
+export const REVIEWER_VARIANT = ACTIVE_PRODUCTION_PROFILE.requestedVariant;
 export const REVIEWER_AGENT = "smart-approve-reviewer" as const;
 /** Compatibility export; the canonical payload lives in reviewer/contract.ts. */
 export const REVIEWER_OUTPUT_FORMAT = CONTRACT_OUTPUT_FORMAT;
@@ -77,7 +78,7 @@ export interface ReviewerAgentOptions {
   readonly model?: string;
   readonly providerID?: string;
   readonly modelID?: string;
-  readonly variant?: string;
+  readonly variant?: string | null;
 }
 
 export interface ReviewerAgent {
@@ -215,8 +216,10 @@ export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgen
   let disposed = false;
   const configuredModel = parseModel(options.model);
   const providerID = options.providerID ?? configuredModel.providerID ?? "opencode-go";
-  const modelID = options.modelID ?? configuredModel.modelID ?? "deepseek-v4-flash";
-  const variant = options.variant ?? REVIEWER_VARIANT;
+  const modelID = options.modelID ?? configuredModel.modelID ?? ACTIVE_PRODUCTION_PROFILE.modelID;
+  const selectedProfile = options.model ? profileForModel(options.model) : profileForModel(`${providerID}/${modelID}`);
+  const explicitModel = options.model !== undefined || options.providerID !== undefined || options.modelID !== undefined;
+  const variant = options.variant !== undefined ? options.variant : selectedProfile?.requestedVariant ?? (explicitModel ? null : REVIEWER_VARIANT);
 
   const cleanup = async (sessionID: string, requestID: string): Promise<void> => {
     if (owned.get(sessionID)?.requestID !== requestID) return;
@@ -247,7 +250,7 @@ export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgen
         coordinatorID,
         providerID,
         modelID,
-        requestedVariant: variant,
+        ...(variant === null ? {} : { requestedVariant: variant }),
         timeoutMs,
         directory: options.directory,
         parentSessionID: request.parentSessionID,

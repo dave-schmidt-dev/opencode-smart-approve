@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { MAX_AST_DEPTH, MAX_INPUT_BYTES, MAX_SEGMENTS } from "../parser/limits";
+import { ACTIVE_PRODUCTION_PROFILE } from "../reviewer/model-profile";
 
-export const DEFAULT_MODEL_PROVIDER = "opencode-go" as const;
-export const DEFAULT_MODEL_ID = "deepseek-v4-flash" as const;
-export const DEFAULT_MODEL_VARIANT = "max" as const;
+export const DEFAULT_MODEL_PROVIDER = ACTIVE_PRODUCTION_PROFILE.providerID;
+export const DEFAULT_MODEL_ID = ACTIVE_PRODUCTION_PROFILE.modelID;
+export const DEFAULT_MODEL_VARIANT = ACTIVE_PRODUCTION_PROFILE.requestedVariant ?? undefined;
 export const DEFAULT_TIMEOUT_MS = 30_000 as const;
 export const DEFAULT_AUDIT_MAX_BYTES = 1_000_000 as const;
 export const DEFAULT_AUDIT_MAX_FILES = 2 as const;
@@ -18,7 +19,7 @@ const ModelSchema = z.object({
   enabled: z.boolean().default(false),
   provider: z.string().min(1).default(DEFAULT_MODEL_PROVIDER),
   model: z.string().min(1).default(DEFAULT_MODEL_ID),
-  variant: z.string().min(1).default(DEFAULT_MODEL_VARIANT),
+  variant: z.union([z.string().min(1), z.undefined()]),
   timeoutMs: z.number().int().min(10_000).max(60_000).default(DEFAULT_TIMEOUT_MS),
 }).strict();
 

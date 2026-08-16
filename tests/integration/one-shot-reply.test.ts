@@ -53,6 +53,7 @@ describe("one-shot OpenCode permission reply", () => {
         },
       },
     });
+    expect((runtimeConfig.agent as Record<string, Record<string, unknown>>)["smart-approve-reviewer"].variant).toBe("max");
     await hooks.dispose?.();
   });
 

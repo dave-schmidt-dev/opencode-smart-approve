@@ -27,8 +27,6 @@ import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 import {
   MAX_CONCURRENT_REVIEWERS,
   MAX_P95_MS,
-  QUALIFICATION_MODEL,
-  QUALIFICATION_VARIANT,
   REPEAT_COUNT,
   REQUIRED_OPENCODE_VERSION,
   REVIEW_TIMEOUT_MS,
@@ -39,6 +37,7 @@ import {
   type TerminalKind,
   type FixtureCategory,
 } from "./core";
+import { validateModelProfile, type ModelProfile } from "../../src/reviewer/model-profile";
 import {
   blindFixtures,
   labelIndex,
@@ -66,20 +65,13 @@ import { generateKeyPairSync } from "node:crypto";
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
 
-const QUALIFICATION_CONFIG = JSON.stringify({
-  model: QUALIFICATION_MODEL,
-  agent: {
-    "smart-approve-reviewer": {
-      description: "Tool-free command safety reviewer used only for qualification",
-      mode: "subagent",
-      model: QUALIFICATION_MODEL,
-      variant: QUALIFICATION_VARIANT,
-      temperature: TEMPERATURE,
-      permission: { bash: "deny", edit: "deny", webfetch: "deny", doom_loop: "deny", external_directory: "deny" },
-      tools: { "*": false },
-    },
-  },
-});
+function qualificationConfig(profile: ModelProfile): string {
+  return JSON.stringify({ model: profile.model, agent: { "smart-approve-reviewer": {
+    description: "Tool-free command safety reviewer used only for qualification", mode: "subagent", model: profile.model,
+    ...(profile.requestedVariant === null ? {} : { variant: profile.requestedVariant }), temperature: TEMPERATURE,
+    permission: { bash: "deny", edit: "deny", webfetch: "deny", doom_loop: "deny", external_directory: "deny" }, tools: { "*": false },
+  } } });
+}
 
 /**
  * Thresholds reused unchanged from the development regime, plus one addition.
@@ -220,6 +212,13 @@ export function assertCandidateBinding(boundHash?: string, manifestPath = resolv
   return manifest.manifestHash;
 }
 
+/** Ensure corpus provenance names the classifier frozen in the candidate. */
+export function assertCorpusModelBinding(corpus: MachineReleaseCorpus, profile: ModelProfile): void {
+  if (corpus.provenance.classifierUnderTest !== profile.model) {
+    throw new Error(`machine corpus classifier ${corpus.provenance.classifierUnderTest} does not match candidate profile ${profile.model}`);
+  }
+}
+
 function readCandidateManifest(manifestPath: string): FrozenCandidateManifest {
   return validateFrozenCandidateManifest(JSON.parse(readFileSync(resolve(manifestPath), "utf8")));
 }
@@ -260,6 +259,7 @@ export function normalizeMachineTerminalKind(input: {
 export async function runBlindedDraw(input: {
   readonly blinded: readonly BlindedFixture[];
   readonly onStatus: (message: string) => void;
+  readonly modelProfile: ModelProfile;
 }): Promise<readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }[]> {
   // Idempotent: `runMachineRelease` already ran this before spending custody.
   // Repeating it keeps direct callers of `runBlindedDraw` honest.
@@ -280,12 +280,12 @@ export async function runBlindedDraw(input: {
   const baseUrl = `http://127.0.0.1:${port}`;
   const child = Bun.spawn([OPENCODE_BIN, "serve", "--pure", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: PROJECT_ROOT,
-    env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome, XDG_STATE_HOME: stateHome, OPENCODE_CONFIG_CONTENT: QUALIFICATION_CONFIG },
+    env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome, XDG_STATE_HOME: stateHome, OPENCODE_CONFIG_CONTENT: qualificationConfig(input.modelProfile) },
     stdout: "ignore",
     stderr: "ignore",
   });
   const client = createOpencodeClient({ baseUrl, directory: PROJECT_ROOT });
-  const reviewer = createReviewerAgent({ client: client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: QUALIFICATION_MODEL, variant: QUALIFICATION_VARIANT });
+  const reviewer = createReviewerAgent({ client: client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: input.modelProfile.model, variant: input.modelProfile.requestedVariant });
 
   const jobs = input.blinded.flatMap((fixture) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({ fixture, repeat: index + 1 })));
   const results = new Array<{ fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }>(jobs.length);
@@ -529,6 +529,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const development = developmentShapeSets();
   const errors = validateMachineReleaseCorpus(corpus, development.ids, development.shapes);
   if (errors.length > 0) throw new Error(`machine release corpus failed validation: ${errors.join("; ")}`);
+  assertCorpusModelBinding(corpus, candidate.candidate.modelProfile);
   // The corpus binding is only a well-formed digest to `validateMachineReleaseCorpus`.
   // Tie it to the candidate this run actually executes against, so the aggregate
   // cannot name a candidate that never produced it.
@@ -544,7 +545,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // fixtures are deterministic-manual by rubric and never call a provider.
   const blinded = blindFixtures(corpus.release);
   onStatus(`blinded ${blinded.length} fixtures; ${corpus.release.filter((fixture) => fixture.route === "reviewer").length} are reviewer-routed`);
-  const results = await runBlindedDraw({ blinded, onStatus });
+  const results = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile });
   const aggregate = scoreMachineRun({ corpus, results, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt });
   await Bun.write(resolve(options.aggregatePath), `${JSON.stringify(aggregate, null, 2)}\n`);
   return aggregate;

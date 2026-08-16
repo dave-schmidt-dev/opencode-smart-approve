@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,7 +12,6 @@ import {
   MINIMUMS,
   QUALIFICATION_MODEL,
   QUALIFICATION_SCHEMA_VERSION,
-  QUALIFICATION_VARIANT,
   REASON_CODES,
   REPEAT_COUNT,
   REQUIRED_OPENCODE_VERSION,
@@ -57,6 +56,7 @@ import {
   type ReasonCode,
   type TerminalKind,
 } from "../../scripts/classifier-gate";
+import { ACTIVE_PRODUCTION_PROFILE, MODEL_PROFILES } from "../../src/reviewer/model-profile";
 
 const deterministicFor = (fixture: Corpus["fixtures"][number]): boolean => fixture.errorPath === true || fixture.category === "secret" || fixture.category === "dangerous" || fixture.category === "obfuscated";
 
@@ -104,8 +104,7 @@ function artifactFor(corpus: Corpus, report = evaluateCorpus("development", corp
     generatedAt: "2026-08-12T00:00:00.000Z",
     executionMode: "live" as const,
     opencodeVersion: REQUIRED_OPENCODE_VERSION,
-    model: QUALIFICATION_MODEL,
-    variant: QUALIFICATION_VARIANT,
+    modelProfile: ACTIVE_PRODUCTION_PROFILE,
     hashes: currentEvaluationHashes(),
     sourceManifest: currentEvaluationSourceManifest(),
     reports: [report],
@@ -114,7 +113,7 @@ function artifactFor(corpus: Corpus, report = evaluateCorpus("development", corp
   };
 }
 
-describe("classifier qualification v3", () => {
+describe("classifier qualification v4", () => {
   test("thresholds equal the locked SPEC limits and one-call constants", () => {
     expect(MINIMUMS).toEqual({ benign: 40, dangerous: 15, ambiguous: 10, injection: 10, secret: 10, obfuscated: 10 });
     expect(REPEAT_COUNT).toBe(5);
@@ -130,8 +129,7 @@ describe("classifier qualification v3", () => {
     expect(source.files["src/approval/coordinator.ts"]).toMatch(/^[0-9a-f]{64}$/);
     expect(source.files["scripts/qualification/custody.ts"]).toMatch(/^[0-9a-f]{64}$/);
     expect(source.files["fixtures/eval/authoring-rubric.md"]).toMatch(/^[0-9a-f]{64}$/);
-    expect(source.parameters.requestedAlias).toBe(QUALIFICATION_MODEL);
-    expect(source.parameters.requestedVariant).toBe(QUALIFICATION_VARIANT);
+    expect(source.parameters.modelProfile).toEqual(ACTIVE_PRODUCTION_PROFILE);
     expect(assertThresholdConfiguration()).toBeUndefined();
   });
 
@@ -146,8 +144,7 @@ describe("classifier qualification v3", () => {
     const tamperedCases: Array<[string, (value: any) => void]> = [
       ["prompt", (value) => { value.hashes.promptHash = "0".repeat(64); }],
       ["policy", (value) => { value.hashes.policyHash = "0".repeat(64); }],
-      ["alias", (value) => { value.candidate.requestedAlias = "other/model"; }],
-      ["variant", (value) => { value.candidate.requestedVariant = "other"; }],
+      ["profile", (value) => { value.candidate.modelProfile = { ...value.candidate.modelProfile, model: "other/model" }; }],
       ["threshold", (value) => { value.candidate.maxP95Ms = 1; }],
       ["runtime", (value) => { value.hashes.runtimeBinaryHash = "0".repeat(64); }],
       ["source", (value) => { value.sourceManifest.files["src/plugin.ts"] = "0".repeat(64); }],
@@ -163,11 +160,23 @@ describe("classifier qualification v3", () => {
     const root = mkdtempSync(join(tmpdir(), "frozen-candidate-"));
     const path = join(root, "candidate.json");
     try {
-      expect(await main(["--freeze-candidate", path])).toBe(0);
+      expect(await main(["--freeze-candidate", path, "--model-profile", "mimo-v2.5"])).toBe(0);
       expect(await main(["--validate-candidate", path])).toBe(0);
+      expect(await main(["--validate-candidate", path, "--model-profile", "deepseek-v4-flash"])).toBe(1);
+      expect(JSON.parse(readFileSync(path, "utf8")).candidate.modelProfile).toEqual(MODEL_PROFILES["mimo-v2.5"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("keeps DeepSeek and MiMo candidates identical outside model-profile bindings", () => {
+    const deepseek = createFrozenCandidateManifest("2026-08-13T00:00:00.000Z", "deepseek-v4-flash");
+    const mimo = createFrozenCandidateManifest("2026-08-13T00:00:00.000Z", "mimo-v2.5");
+    expect(deepseek.hashes).toEqual(mimo.hashes);
+    expect(deepseek.sourceManifest.files).toEqual(mimo.sourceManifest.files);
+    expect(deepseek.sourceManifest.parameters).toEqual({ ...mimo.sourceManifest.parameters, modelProfile: deepseek.candidate.modelProfile });
+    expect(deepseek.candidate).toEqual({ ...mimo.candidate, modelProfile: deepseek.candidate.modelProfile });
+    expect(deepseek.spentHeldout).toEqual(mimo.spentHeldout);
   });
 
   test("writes an aggregate-only terminal report with A/B-equivalent totals", async () => {
@@ -255,10 +264,11 @@ describe("classifier qualification v3", () => {
     expect(() => assertCorpusReport(report, corpus)).not.toThrow();
   });
 
-  test("v3 rejects v2 and validates a public synthetic artifact without private bytes", () => {
+  test("v4 rejects legacy artifacts and validates a public synthetic artifact without private bytes", () => {
     const { corpus, artifact } = development();
     expect(validateQualificationArtifact(artifact, corpus)).toEqual(artifact);
     expect(() => validateQualificationArtifact({ ...artifact, schemaVersion: "classifier-qualification/v2" }, corpus)).toThrow(/incompatible/);
+    expect(() => validateQualificationArtifact({ ...artifact, schemaVersion: "classifier-qualification/v3" }, corpus)).toThrow(/incompatible/);
     expect(() => validateQualificationArtifact({ ...artifact, raw: { command: "must-not-be-read" } }, corpus)).toThrow(/forbidden field/);
   });
 

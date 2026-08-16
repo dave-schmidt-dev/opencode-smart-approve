@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { findReplanExecutableIdentity, REPLAN_EXECUTABLES, type ReplanExecutableIdentity } from "../src/policy/executable-identity";
 import { REPLAN_GUIDANCE_CATALOG } from "../src/replan/guidance";
+import { ACTIVE_PRODUCTION_PROFILE } from "../src/reviewer/model-profile";
 
 /**
  * Attended, bounded usefulness trial for the opt-in pre-execution replan
@@ -16,7 +17,7 @@ import { REPLAN_GUIDANCE_CATALOG } from "../src/replan/guidance";
 export const REQUIRED_RUNTIME_VERSION = "1.18.10" as const;
 export const SCENARIO_COUNT = 7 as const;
 export const DEFAULT_OUTPUT = resolve(process.cwd(), "eval-results/deny-replan-usefulness-trial.json");
-export const DEFAULT_MODEL = "opencode-go/deepseek-v4-flash" as const;
+export const DEFAULT_MODEL = ACTIVE_PRODUCTION_PROFILE.model;
 export type FeedbackArm = "control" | "treatment" | "historical_bare" | "compact_catalog";
 export const CONTROL_FEEDBACK = "SMART_APPROVE_REPLAN: blocked shell approach; use native tools or a different command" as const;
 /** Frozen pre-enrichment baseline; evaluation-only and never emitted by production. */

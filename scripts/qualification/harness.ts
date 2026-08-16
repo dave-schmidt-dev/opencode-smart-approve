@@ -24,7 +24,7 @@ export interface ParityScenario {
 export interface PublicReviewerContract {
   readonly version: typeof REVIEWER_CONTRACT_VERSION;
   readonly requestedModel: string;
-  readonly requestedVariant: string;
+  readonly requestedVariant?: string;
   readonly temperature: 0;
   readonly retryCount: 0;
   readonly schema: typeof REVIEWER_OUTPUT_SCHEMA;
@@ -103,7 +103,7 @@ const policyForCapture = (pathClasses: readonly ReviewerPathClass[]): Determinis
 const publicContract = (contract: ReviewerContract): PublicReviewerContract => ({
   version: contract.version,
   requestedModel: contract.requestedModel,
-  requestedVariant: contract.requestedVariant,
+  ...(contract.requestedVariant === undefined ? {} : { requestedVariant: contract.requestedVariant }),
   temperature: contract.temperature,
   retryCount: contract.retryCount,
     schema: REVIEWER_OUTPUT_SCHEMA,

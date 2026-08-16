@@ -184,7 +184,7 @@ const reviewerContractSchemaShape = {
   requestedModel: z.string().min(3).max(200),
   providerID: z.string().min(1).max(100),
   modelID: z.string().min(1).max(100),
-  requestedVariant: z.string().min(1).max(100),
+  requestedVariant: z.string().min(1).max(100).optional(),
   temperature: z.literal(0),
   retryCount: z.literal(0),
   schema: z.object({
@@ -228,7 +228,7 @@ export interface ReviewerContractInput {
   readonly coordinatorID: string;
   readonly providerID: string;
   readonly modelID: string;
-  readonly requestedVariant: string;
+  readonly requestedVariant?: string;
   readonly timeoutMs: number;
   readonly directory?: string;
   readonly parentSessionID?: string;
@@ -263,7 +263,7 @@ export function buildReviewerContract(input: ReviewerContractInput): ReviewerCon
     requestedModel,
     providerID: input.providerID,
     modelID: input.modelID,
-    requestedVariant: input.requestedVariant,
+    ...(input.requestedVariant === undefined ? {} : { requestedVariant: input.requestedVariant }),
     temperature: 0,
     retryCount: 0,
     schema: REVIEWER_OUTPUT_SCHEMA,

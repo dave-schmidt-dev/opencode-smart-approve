@@ -9,6 +9,8 @@ import {
 } from "../../src/reviewer/contract";
 import { createReviewerAgent } from "../../src/reviewer/agent";
 import { redactCommand } from "../../src/reviewer/prompt";
+import { validateConfig } from "../../src/config/schema";
+import { MODEL_PROFILES } from "../../src/reviewer/model-profile";
 import {
   buildCandidatePluginCanary,
   buildParityReport,
@@ -26,8 +28,7 @@ describe("canonical reviewer contract", () => {
     const contract = buildReviewerContract({
       coordinatorID,
       providerID: "opencode-go",
-      modelID: "deepseek-v4-flash",
-      requestedVariant: "max",
+      modelID: "mimo-v2.5",
       timeoutMs: 30_000,
       directory: "/project",
       parentSessionID: "parent-session",
@@ -39,8 +40,7 @@ describe("canonical reviewer contract", () => {
     expect(contract).toMatchObject({
       version: "classifier-qualification/v3",
       coordinatorID,
-      requestedModel: "opencode-go/deepseek-v4-flash",
-      requestedVariant: "max",
+      requestedModel: "opencode-go/mimo-v2.5",
       temperature: 0,
       retryCount: 0,
       timeoutMs: 30_000,
@@ -237,6 +237,20 @@ describe("production/evaluation parity harness", () => {
     expect(serialized).not.toContain("PARITY_SECRET_CANARY");
     expect(serialized).not.toContain(scenario.directory);
     expect(validateParityReport(buildParityReport(production, evaluation))).toEqual({ accepted: true, errors: [] });
+  });
+
+  test("keeps a no-variant MiMo candidate identical across production and evaluation plumbing", async () => {
+    const profile = MODEL_PROFILES["mimo-v2.5"];
+    const config = validateConfig({
+      model: { enabled: false, provider: profile.providerID, model: profile.modelID, variant: undefined, timeoutMs: 30_000 },
+    });
+    const production = await captureProductionParity(scenario, config);
+    const evaluation = captureEvaluationParity(scenario, config);
+    expect(compareParityCaptures(production, evaluation)).toEqual({ equal: true, mismatches: [] });
+    expect(production.registration.model).toBe(profile.model);
+    expect(production.registration.variant).toBeUndefined();
+    expect(production.contract).not.toHaveProperty("requestedVariant");
+    expect(production.prompt.variant).toBeUndefined();
   });
 
   test("field-level parity negatives identify each deliberately divergent capture", async () => {

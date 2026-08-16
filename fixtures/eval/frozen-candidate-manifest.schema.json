@@ -1,21 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "classifier-candidate/v1",
+  "$id": "classifier-candidate/v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "generatedAt", "candidate", "hashes", "sourceManifest", "providerRevision", "servedVariant", "spentHeldout", "manifestHash"],
   "properties": {
-    "schemaVersion": { "const": "classifier-candidate/v1" },
+    "schemaVersion": { "const": "classifier-candidate/v2" },
     "generatedAt": { "type": "string", "minLength": 1 },
     "candidate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["promptProfile", "model", "requestedAlias", "requestedVariant", "contractVersion", "temperature", "repeats", "timeoutMs", "maxP95Ms", "maxConcurrentReviewers"],
+      "required": ["promptProfile", "modelProfile", "contractVersion", "temperature", "repeats", "timeoutMs", "maxP95Ms", "maxConcurrentReviewers"],
       "properties": {
         "promptProfile": { "const": "smart-approve-reviewer/v1" },
-        "model": { "const": "opencode-go/deepseek-v4-flash" },
-        "requestedAlias": { "const": "opencode-go/deepseek-v4-flash" },
-        "requestedVariant": { "const": "max" },
+        "modelProfile": { "$ref": "#/$defs/modelProfile" },
         "contractVersion": { "const": "classifier-qualification/v3" },
         "temperature": { "const": 0 },
         "repeats": { "const": 5 },
@@ -40,7 +38,7 @@
         "runtimeBinaryHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
-    "sourceManifest": { "$ref": "qualification-artifact-v3.schema.json#/$defs/sourceManifest" },
+    "sourceManifest": { "$ref": "qualification-artifact-v4.schema.json#/$defs/sourceManifest" },
     "providerRevision": { "const": "unavailable" },
     "servedVariant": { "const": "unavailable" },
     "spentHeldout": {
@@ -53,5 +51,16 @@
       }
     },
     "manifestHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "$defs": {
+    "modelProfile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "providerID", "modelID", "model", "requestedVariant"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 }, "providerID": { "type": "string", "minLength": 1 },
+        "modelID": { "type": "string", "minLength": 1 }, "model": { "type": "string", "minLength": 1 },
+        "requestedVariant": { "type": ["string", "null"], "minLength": 1 }
+      }
+    }
   }
 }

@@ -5,15 +5,15 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { evaluateDeterministicPolicy } from "../src/policy/deterministic";
-import { createReviewerAgent, REVIEWER_MODEL, REVIEWER_VARIANT, type ReviewerSessionClient } from "../src/reviewer/agent";
+import { createReviewerAgent, type ReviewerSessionClient } from "../src/reviewer/agent";
+import { REVIEWER_CONTRACT_VERSION } from "../src/reviewer/contract";
+import { ACTIVE_PRODUCTION_PROFILE, ACTIVE_PRODUCTION_PROFILE_ID, getModelProfile, validateModelProfile, type ModelProfile, type ModelProfileID } from "../src/reviewer/model-profile";
 import {
   CATEGORIES,
   MAX_CONCURRENT_REVIEWERS,
   MAX_P95_MS,
   MINIMUMS,
-  QUALIFICATION_MODEL,
   QUALIFICATION_SCHEMA_VERSION,
-  QUALIFICATION_VARIANT,
   REPEAT_COUNT,
   REQUIRED_OPENCODE_VERSION,
   REVIEW_TIMEOUT_MS,
@@ -40,7 +40,7 @@ import {
   type EvaluationHashes,
   type Fixture,
   type FaultReport,
-  type QualificationArtifactV3,
+  type QualificationArtifactV4,
   type QualificationRecord,
   type QualificationReport,
   type EvaluationSourceManifest,
@@ -53,20 +53,18 @@ export * from "./qualification/custody";
 
 export type RecordedInvocation = QualificationRecord;
 
-export const CANDIDATE_SCHEMA_VERSION = "classifier-candidate/v1" as const;
+export const CANDIDATE_SCHEMA_VERSION = "classifier-candidate/v2" as const;
 export const UNATTESTED_PROVIDER_REVISION = "unavailable" as const;
 export const UNATTESTED_SERVED_VARIANT = "unavailable" as const;
-export const DEVELOPMENT_REPORT_SCHEMA_VERSION = "classifier-development-report/v1" as const;
+export const DEVELOPMENT_REPORT_SCHEMA_VERSION = "classifier-development-report/v2" as const;
 
 export interface FrozenCandidateManifest {
   readonly schemaVersion: typeof CANDIDATE_SCHEMA_VERSION;
   readonly generatedAt: string;
   readonly candidate: {
     readonly promptProfile: "smart-approve-reviewer/v1";
-    readonly model: typeof QUALIFICATION_MODEL;
-    readonly requestedAlias: typeof QUALIFICATION_MODEL;
-    readonly requestedVariant: typeof QUALIFICATION_VARIANT;
-    readonly contractVersion: typeof QUALIFICATION_SCHEMA_VERSION;
+    readonly modelProfile: ModelProfile;
+    readonly contractVersion: typeof REVIEWER_CONTRACT_VERSION;
     readonly temperature: typeof TEMPERATURE;
     readonly repeats: typeof REPEAT_COUNT;
     readonly timeoutMs: typeof REVIEW_TIMEOUT_MS;
@@ -100,15 +98,13 @@ export interface DevelopmentCandidateReport {
   readonly terminal: DevelopmentTerminal;
   readonly failureCode?: DevelopmentFailureCode;
   readonly opencodeVersion: typeof REQUIRED_OPENCODE_VERSION;
-  readonly model: typeof QUALIFICATION_MODEL;
-  readonly variant: typeof QUALIFICATION_VARIANT;
+  readonly modelProfile: ModelProfile;
   readonly candidateManifestHash: string;
   readonly hashes: EvaluationHashes;
   readonly sourceManifest: EvaluationSourceManifest;
   readonly contract: {
-    readonly version: typeof QUALIFICATION_SCHEMA_VERSION;
-    readonly requestedAlias: typeof QUALIFICATION_MODEL;
-    readonly requestedVariant: typeof QUALIFICATION_VARIANT;
+    readonly version: typeof REVIEWER_CONTRACT_VERSION;
+    readonly modelProfile: ModelProfile;
     readonly temperature: typeof TEMPERATURE;
     readonly repeats: typeof REPEAT_COUNT;
     readonly timeoutMs: typeof REVIEW_TIMEOUT_MS;
@@ -127,20 +123,27 @@ const ARTIFACT_PATH = resolve(PROJECT_ROOT, "eval-results/classifier-qualificati
 export const FROZEN_CANDIDATE_PATH = resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json");
 export const DEVELOPMENT_REPORT_PATH = resolve(PROJECT_ROOT, "eval-results/development-candidate-report.json");
 const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
-const QUALIFICATION_CONFIG = JSON.stringify({
-  model: QUALIFICATION_MODEL,
-  agent: {
-    "smart-approve-reviewer": {
-      description: "Tool-free command safety reviewer used only for qualification",
-      mode: "subagent",
-      model: QUALIFICATION_MODEL,
-      variant: QUALIFICATION_VARIANT,
-      temperature: TEMPERATURE,
-      permission: { bash: "deny", edit: "deny", webfetch: "deny", doom_loop: "deny", external_directory: "deny" },
-      tools: { "*": false },
+function qualificationConfig(profile: ModelProfile): string {
+  const model = {
+    providerID: profile.providerID,
+    modelID: profile.modelID,
+    ...(profile.requestedVariant === null ? {} : { variant: profile.requestedVariant }),
+  };
+  return JSON.stringify({
+    model: profile.model,
+    agent: {
+      "smart-approve-reviewer": {
+        description: "Tool-free command safety reviewer used only for qualification",
+        mode: "subagent",
+        model: profile.model,
+        temperature: TEMPERATURE,
+        permission: { bash: "deny", edit: "deny", webfetch: "deny", doom_loop: "deny", external_directory: "deny" },
+        tools: { "*": false },
+        ...(model.variant === undefined ? {} : { variant: model.variant }),
+      },
     },
-  },
-});
+  });
+}
 
 let developmentCorpusReadCount = 0;
 let legacyCombinedCorpusReadCount = 0;
@@ -228,6 +231,8 @@ const SOURCE_MANIFEST_FILES = [
   "src/reviewer/schema.ts",
   "src/reviewer/agent.ts",
   "src/reviewer/client.ts",
+  "src/reviewer/model-profile.ts",
+  "src/config/schema.ts",
   "src/plugin.ts",
   "scripts/classifier-gate.ts",
   "scripts/qualification/core.ts",
@@ -238,7 +243,7 @@ const SOURCE_MANIFEST_FILES = [
   "scripts/qualification/verify-terminal.ts",
   "fixtures/eval/development.json",
   "fixtures/eval/authoring-rubric.md",
-  "fixtures/eval/qualification-artifact-v3.schema.json",
+  "fixtures/eval/qualification-artifact-v4.schema.json",
   "fixtures/eval/qualification-fault-report.schema.json",
   "fixtures/eval/development-candidate-report.schema.json",
   "fixtures/eval/frozen-candidate-manifest.schema.json",
@@ -253,7 +258,7 @@ const SOURCE_MANIFEST_FILES = [
 ] as const;
 
 /** Source/config bindings are staleness checks, never immutable-weight or served-variant attestations. */
-export function currentEvaluationSourceManifest(): EvaluationSourceManifest {
+export function currentEvaluationSourceManifest(profile: ModelProfile = ACTIVE_PRODUCTION_PROFILE): EvaluationSourceManifest {
   const files = Object.fromEntries(SOURCE_MANIFEST_FILES.map((path) => [path, hashFile(path)]));
   const base = {
     schemaVersion: "qualification-source-manifest/v1" as const,
@@ -262,10 +267,7 @@ export function currentEvaluationSourceManifest(): EvaluationSourceManifest {
     servedVariantAttested: false as const,
     files,
     parameters: {
-      model: QUALIFICATION_MODEL,
-      variant: QUALIFICATION_VARIANT,
-      requestedAlias: QUALIFICATION_MODEL,
-      requestedVariant: QUALIFICATION_VARIANT,
+      modelProfile: profile,
       temperature: TEMPERATURE,
       repeats: REPEAT_COUNT,
       timeoutMs: REVIEW_TIMEOUT_MS,
@@ -281,16 +283,14 @@ export function validateReleaseStreamCommitment(streamDigest: string, commitment
   return /^[0-9a-f]{64}$/.test(streamDigest) && streamDigest === commitment.corpusDigest && verifySignedConsumptionCommitment(commitment);
 }
 
-function candidateBase(generatedAt: string): Omit<FrozenCandidateManifest, "manifestHash"> {
+function candidateBase(generatedAt: string, profile: ModelProfile = ACTIVE_PRODUCTION_PROFILE): Omit<FrozenCandidateManifest, "manifestHash"> {
   return {
     schemaVersion: CANDIDATE_SCHEMA_VERSION,
     generatedAt,
     candidate: {
       promptProfile: "smart-approve-reviewer/v1",
-      model: QUALIFICATION_MODEL,
-      requestedAlias: QUALIFICATION_MODEL,
-      requestedVariant: QUALIFICATION_VARIANT,
-      contractVersion: QUALIFICATION_SCHEMA_VERSION,
+      modelProfile: profile,
+      contractVersion: REVIEWER_CONTRACT_VERSION,
       temperature: TEMPERATURE,
       repeats: REPEAT_COUNT,
       timeoutMs: REVIEW_TIMEOUT_MS,
@@ -298,7 +298,7 @@ function candidateBase(generatedAt: string): Omit<FrozenCandidateManifest, "mani
       maxConcurrentReviewers: MAX_CONCURRENT_REVIEWERS,
     },
     hashes: currentEvaluationHashes(),
-    sourceManifest: currentEvaluationSourceManifest(),
+    sourceManifest: currentEvaluationSourceManifest(profile),
     providerRevision: UNATTESTED_PROVIDER_REVISION,
     servedVariant: UNATTESTED_SERVED_VARIANT,
     spentHeldout: { fixtureIDs: [], hashes: [] },
@@ -306,8 +306,8 @@ function candidateBase(generatedAt: string): Omit<FrozenCandidateManifest, "mani
 }
 
 /** Create the sole source-current candidate; no release identifiers enter it. */
-export function createFrozenCandidateManifest(generatedAt = new Date().toISOString()): FrozenCandidateManifest {
-  const base = candidateBase(generatedAt);
+export function createFrozenCandidateManifest(generatedAt = new Date().toISOString(), profileID: ModelProfileID = ACTIVE_PRODUCTION_PROFILE_ID): FrozenCandidateManifest {
+  const base = candidateBase(generatedAt, getModelProfile(profileID));
   return { ...base, manifestHash: sha256(canonical(base)) };
 }
 
@@ -318,11 +318,17 @@ export function validateFrozenCandidateManifest(value: unknown): FrozenCandidate
   const allowedRoot = ["schemaVersion", "generatedAt", "candidate", "hashes", "sourceManifest", "providerRevision", "servedVariant", "spentHeldout", "manifestHash"];
   if (Object.keys(value).some((key) => !allowedRoot.includes(key)) || ["selection", "comparison", "candidates"].some((key) => key in value)) throw new Error("candidate manifest contains a selection or comparison list");
   if (!isRecord(value.candidate)) throw new Error("candidate manifest candidate is missing");
-  const allowedCandidate = ["promptProfile", "model", "requestedAlias", "requestedVariant", "contractVersion", "temperature", "repeats", "timeoutMs", "maxP95Ms", "maxConcurrentReviewers"];
+  const allowedCandidate = ["promptProfile", "modelProfile", "contractVersion", "temperature", "repeats", "timeoutMs", "maxP95Ms", "maxConcurrentReviewers"];
   if (Object.keys(value.candidate).some((key) => !allowedCandidate.includes(key))) throw new Error("candidate manifest candidate is not singular");
-  if (canonical(value.candidate) !== canonical(candidateBase(value.generatedAt).candidate)) throw new Error("candidate manifest candidate is stale");
+  let profile: ModelProfile;
+  try {
+    profile = validateModelProfile(value.candidate.modelProfile);
+  } catch (error) {
+    throw new Error(`candidate manifest ${error instanceof Error ? error.message : "model profile is invalid"}`);
+  }
+  if (canonical(value.candidate) !== canonical(candidateBase(value.generatedAt, profile).candidate)) throw new Error("candidate manifest candidate is stale");
   if (!isRecord(value.hashes) || canonical(value.hashes) !== canonical(currentEvaluationHashes())) throw new Error("candidate manifest hashes are stale");
-  if (!isRecord(value.sourceManifest) || canonical(value.sourceManifest) !== canonical(currentEvaluationSourceManifest())) throw new Error("candidate manifest source manifest is stale");
+  if (!isRecord(value.sourceManifest) || canonical(value.sourceManifest) !== canonical(currentEvaluationSourceManifest(profile))) throw new Error("candidate manifest source manifest is stale");
   if (value.providerRevision !== UNATTESTED_PROVIDER_REVISION || value.servedVariant !== UNATTESTED_SERVED_VARIANT) throw new Error("candidate provider identity is unattested");
   if (!isRecord(value.spentHeldout) || !Array.isArray(value.spentHeldout.fixtureIDs) || !Array.isArray(value.spentHeldout.hashes) || value.spentHeldout.fixtureIDs.length !== 0 || value.spentHeldout.hashes.length !== 0) throw new Error("candidate manifest contains spent held-out evidence");
   if (typeof value.manifestHash !== "string") throw new Error("candidate manifest hash is missing");
@@ -342,7 +348,7 @@ const DEVELOPMENT_AGGREGATE_KEYS = [
 ] as const;
 const DEVELOPMENT_FAULT_KEYS = ["schemaVersion", "generatedAt", "executionMode", "invalidRunCount", "classifierDenominator", "boundaryCounts", "latencyP95Ms", "observationCount"] as const;
 const DEVELOPMENT_REPORT_KEYS = [
-  "schemaVersion", "generatedAt", "terminal", "failureCode", "opencodeVersion", "model", "variant", "candidateManifestHash",
+  "schemaVersion", "generatedAt", "terminal", "failureCode", "opencodeVersion", "modelProfile", "candidateManifestHash",
   "hashes", "sourceManifest", "contract", "development", "faults", "aggregateDigest",
 ] as const;
 const AGGREGATE_FORBIDDEN_KEY = /^(?:record|records|observation|observations|observationID|observationIDs|fixtureID|fixtureIDs|command|commands|output|prompt|providerResponse|raw|error|errors|providerProse|sharedObservationIDs)$/i;
@@ -384,11 +390,10 @@ function aggregateFaultReport(report: FaultReport): DevelopmentFaultAggregate {
   return { ...aggregate, observationCount: observations.length };
 }
 
-function developmentContract(): DevelopmentCandidateReport["contract"] {
+function developmentContract(profile: ModelProfile): DevelopmentCandidateReport["contract"] {
   return {
-    version: QUALIFICATION_SCHEMA_VERSION,
-    requestedAlias: QUALIFICATION_MODEL,
-    requestedVariant: QUALIFICATION_VARIANT,
+    version: REVIEWER_CONTRACT_VERSION,
+    modelProfile: profile,
     temperature: TEMPERATURE,
     repeats: REPEAT_COUNT,
     timeoutMs: REVIEW_TIMEOUT_MS,
@@ -419,12 +424,11 @@ export function createDevelopmentCandidateReport(input: {
     terminal: input.terminal,
     ...(failureCode ? { failureCode } : {}),
     opencodeVersion: REQUIRED_OPENCODE_VERSION,
-    model: QUALIFICATION_MODEL,
-    variant: QUALIFICATION_VARIANT,
+    modelProfile: input.candidate.candidate.modelProfile,
     candidateManifestHash: input.candidate.manifestHash,
     hashes: currentEvaluationHashes(),
-    sourceManifest: currentEvaluationSourceManifest(),
-    contract: developmentContract(),
+    sourceManifest: currentEvaluationSourceManifest(input.candidate.candidate.modelProfile),
+    contract: developmentContract(input.candidate.candidate.modelProfile),
     development,
     faults,
   } satisfies Omit<DevelopmentCandidateReport, "aggregateDigest">;
@@ -439,10 +443,11 @@ export function validateDevelopmentCandidateReport(value: unknown, candidate: Fr
   assertExactKeys(value, value.failureCode === undefined ? DEVELOPMENT_REPORT_KEYS.filter((key) => key !== "failureCode") : DEVELOPMENT_REPORT_KEYS, "development report");
   if (value.schemaVersion !== DEVELOPMENT_REPORT_SCHEMA_VERSION || typeof value.generatedAt !== "string" || (value.terminal !== "development-pass" && value.terminal !== "stop-disabled")) throw new Error("development report metadata is invalid");
   if ((value.terminal === "development-pass" && value.failureCode !== undefined) || (value.terminal === "stop-disabled" && !["invalid_run", "threshold", "runtime"].includes(String(value.failureCode)))) throw new Error("development report terminal code is invalid");
-  if (value.opencodeVersion !== REQUIRED_OPENCODE_VERSION || value.model !== QUALIFICATION_MODEL || value.variant !== QUALIFICATION_VARIANT || value.candidateManifestHash !== candidate.manifestHash) throw new Error("development report candidate binding is stale");
+  const profile = validateModelProfile(value.modelProfile);
+  if (value.opencodeVersion !== REQUIRED_OPENCODE_VERSION || canonical(profile) !== canonical(candidate.candidate.modelProfile) || value.candidateManifestHash !== candidate.manifestHash) throw new Error("development report candidate binding is stale");
   if (!isRecord(value.hashes) || canonical(value.hashes) !== canonical(candidate.hashes) || canonical(value.hashes) !== canonical(currentEvaluationHashes())) throw new Error("development report hashes are stale");
-  if (!isRecord(value.sourceManifest) || canonical(value.sourceManifest) !== canonical(candidate.sourceManifest) || canonical(value.sourceManifest) !== canonical(currentEvaluationSourceManifest())) throw new Error("development report source manifest is stale");
-  if (!isRecord(value.contract) || canonical(value.contract) !== canonical(developmentContract())) throw new Error("development report contract is stale");
+  if (!isRecord(value.sourceManifest) || canonical(value.sourceManifest) !== canonical(candidate.sourceManifest) || canonical(value.sourceManifest) !== canonical(currentEvaluationSourceManifest(profile))) throw new Error("development report source manifest is stale");
+  if (!isRecord(value.contract) || canonical(value.contract) !== canonical(developmentContract(profile))) throw new Error("development report contract is stale");
   if (!isRecord(value.development)) throw new Error("development report aggregate is missing");
   const development = value.development as unknown as DevelopmentAggregate;
   assertExactKeys(value.development, DEVELOPMENT_AGGREGATE_KEYS, "development aggregate");
@@ -512,7 +517,7 @@ export function currentEvaluationHashes(): EvaluationHashes {
   return {
     corpusHash: developmentCorpusHash,
     developmentCorpusHash,
-    schemaHash: hashFiles(["fixtures/eval/qualification-artifact-v3.schema.json", "fixtures/eval/qualification-fault-report.schema.json", "fixtures/eval/development-candidate-report.schema.json"]),
+    schemaHash: hashFiles(["fixtures/eval/qualification-artifact-v4.schema.json", "fixtures/eval/qualification-fault-report.schema.json", "fixtures/eval/development-candidate-report.schema.json"]),
     promptHash: hashFiles(["src/reviewer/prompt.ts", "src/reviewer/schema.ts", "src/reviewer/contract.ts"]),
     policyHash: hashFiles(["src/policy/deterministic.ts", "src/policy/builtin-rules.ts", "src/privacy/secret-scan.ts", "src/privacy/sensitive-paths.ts"]),
     evaluatorHash: hashFiles(["scripts/classifier-gate.ts"]),
@@ -541,13 +546,13 @@ function assertNoSensitiveFields(value: unknown, parentKey = ""): void {
 }
 
 function parseRecord(value: unknown): QualificationRecord {
-  if (!isRecord(value)) throw new Error("qualification artifact contains malformed v3 record");
+  if (!isRecord(value)) throw new Error("qualification artifact contains malformed v4 record");
   const record = value as unknown as QualificationRecord;
   validateQualificationRecord(record);
   return record;
 }
 
-function validateReportRecords(report: QualificationArtifactV3["reports"][number], corpus?: Corpus): void {
+function validateReportRecords(report: QualificationArtifactV4["reports"][number], corpus?: Corpus): void {
   const ids = new Set<string>();
   const keys = new Set<string>();
   for (const record of report.records) {
@@ -568,18 +573,19 @@ function validateReportRecords(report: QualificationArtifactV3["reports"][number
 
 export function validateQualificationArtifact(value: unknown, developmentCorpus = loadDevelopmentCorpus().corpus): QualificationReport {
   assertNoSensitiveFields(value);
-  if (!isRecord(value) || value.schemaVersion === "classifier-qualification/v2") throw new Error("qualification artifact v2 is incompatible with classifier-qualification/v3");
-  if (value.schemaVersion !== QUALIFICATION_SCHEMA_VERSION || value.executionMode !== "live" || value.opencodeVersion !== REQUIRED_OPENCODE_VERSION || value.model !== QUALIFICATION_MODEL || value.variant !== QUALIFICATION_VARIANT || typeof value.generatedAt !== "string" || !isRecord(value.hashes) || !isRecord(value.sourceManifest) || !Array.isArray(value.reports) || (value.reports.length !== 1 && value.reports.length !== 2) || !isRecord(value.faults) || !Array.isArray(value.corpusErrors) || value.corpusErrors.length !== 0) throw new Error("qualification artifact metadata is invalid or simulated");
+  if (!isRecord(value) || value.schemaVersion === "classifier-qualification/v2" || value.schemaVersion === "classifier-qualification/v3") throw new Error("legacy qualification artifacts are incompatible with classifier-qualification/v4");
+  const profile = isRecord(value) ? validateModelProfile(value.modelProfile) : undefined;
+  if (value.schemaVersion !== QUALIFICATION_SCHEMA_VERSION || value.executionMode !== "live" || value.opencodeVersion !== REQUIRED_OPENCODE_VERSION || !profile || "model" in value || "variant" in value || typeof value.generatedAt !== "string" || !isRecord(value.hashes) || !isRecord(value.sourceManifest) || !Array.isArray(value.reports) || (value.reports.length !== 1 && value.reports.length !== 2) || !isRecord(value.faults) || !Array.isArray(value.corpusErrors) || value.corpusErrors.length !== 0) throw new Error("qualification artifact metadata is invalid or simulated");
   const hashes = currentEvaluationHashes();
   for (const key of Object.keys(hashes) as (keyof EvaluationHashes)[]) if (value.hashes[key] !== hashes[key]) throw new Error(`qualification artifact is stale: ${key}`);
-  if (canonical(value.sourceManifest) !== canonical(currentEvaluationSourceManifest())) throw new Error("qualification artifact source manifest is stale");
+  if (canonical(value.sourceManifest) !== canonical(currentEvaluationSourceManifest(profile))) throw new Error("qualification artifact source manifest is stale");
   const reports = value.reports.map((raw) => {
     if (!isRecord(raw) || !Array.isArray(raw.records) || (raw.corpus !== "development" && raw.corpus !== "heldout")) throw new Error("qualification artifact report is malformed");
-    return { ...raw, records: raw.records.map(parseRecord) } as unknown as QualificationArtifactV3["reports"][number];
+    return { ...raw, records: raw.records.map(parseRecord) } as unknown as QualificationArtifactV4["reports"][number];
   });
   if (reports[0]?.corpus !== "development" || reports.length === 2 && reports[1]?.corpus !== "heldout") throw new Error("qualification artifact corpus order is invalid");
   for (const report of reports) validateReportRecords(report, report.corpus === "development" ? developmentCorpus : undefined);
-  const faults = value.faults as unknown as QualificationArtifactV3["faults"];
+  const faults = value.faults as unknown as QualificationArtifactV4["faults"];
   assertFaultReport(faults, reports.flatMap((report) => report.records.filter((record) => record.metricEligible).map((record) => record.observationID)));
   return value as unknown as QualificationReport;
 }
@@ -631,6 +637,7 @@ function observationID(fixture: Fixture, repeat: number): string {
 }
 
 async function produceLiveQualification(path: string, candidate: FrozenCandidateManifest): Promise<DevelopmentCandidateReport> {
+  const profile = validateModelProfile(candidate.candidate.modelProfile);
   const qualificationProgress = createQualificationProgressReporter({
     sink: (status) => console.error(`[classifier-qualification] ${status.message}`),
   });
@@ -663,12 +670,12 @@ async function produceLiveQualification(path: string, candidate: FrozenCandidate
   const baseUrl = `http://127.0.0.1:${port}`;
   const child = Bun.spawn([OPENCODE_BIN, "serve", "--pure", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: PROJECT_ROOT,
-    env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome, XDG_STATE_HOME: stateHome, OPENCODE_CONFIG_CONTENT: QUALIFICATION_CONFIG },
+    env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome, XDG_STATE_HOME: stateHome, OPENCODE_CONFIG_CONTENT: qualificationConfig(profile) },
     stdout: "ignore",
     stderr: "ignore",
   });
   const client = createOpencodeClient({ baseUrl, directory: PROJECT_ROOT });
-  const reviewer = createReviewerAgent({ client: client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: REVIEWER_MODEL, variant: REVIEWER_VARIANT });
+  const reviewer = createReviewerAgent({ client: client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: profile.model, variant: profile.requestedVariant });
   const { corpus } = loadDevelopmentCorpus();
   let completed = 0;
   const total = corpus.fixtures.length * REPEAT_COUNT;
@@ -783,15 +790,25 @@ function createRuntimeFailureReport(candidate: FrozenCandidateManifest): Develop
 }
 
 const RELEASE_INPUT_OPTIONS = new Set(["--heldout", "--heldout-corpus", "--release", "--release-corpus", "--private", "--private-corpus", "--combined", "--combined-corpus", "--bundle", "--corpus", "--release-input", "--live-release"]);
-const VALUE_OPTIONS = new Set(["--artifact", "--candidate", "--freeze-candidate", "--validate-candidate", "--validate-development-report"]);
+const VALUE_OPTIONS = new Set(["--artifact", "--candidate", "--freeze-candidate", "--validate-candidate", "--validate-development-report", "--model-profile"]);
 
 export function validateDevelopmentArguments(argv: readonly string[]): void {
   for (const [index, argument] of argv.entries()) {
     if (index > 0 && VALUE_OPTIONS.has(argv[index - 1]!)) continue;
+    if (argument.startsWith("--model-profile=")) throw new Error("--model-profile requires a separate profile id");
     const option = argument.includes("=") ? argument.slice(0, argument.indexOf("=")) : argument;
     if (RELEASE_INPUT_OPTIONS.has(option) || isReleaseInputName(argument) && argument !== "--live" && argument !== "--development") throw new Error("development qualification refuses combined, held-out, private, or release input");
     if (argument !== "--live" && argument !== "--development" && argument !== "--help" && !VALUE_OPTIONS.has(argument) && argument !== "--freeze-candidate" && argument !== "--validate-candidate") throw new Error(`unknown development qualification option: ${argument}`);
   }
+}
+
+function requestedProfileID(argv: readonly string[]): ModelProfileID | undefined {
+  const indexes = argv.flatMap((value, index) => value === "--model-profile" ? [index] : []);
+  if (indexes.length > 1) throw new Error("--model-profile may be specified only once");
+  if (indexes.length === 0) return undefined;
+  const value = argv[indexes[0]! + 1];
+  if (!value || value.startsWith("--")) throw new Error("--model-profile requires a profile id");
+  return getModelProfile(value).id;
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
@@ -800,6 +817,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   try {
     // Parse and reject release-input options before opening any corpus or artifact.
     validateDevelopmentArguments(argv);
+    const profileID = requestedProfileID(argv);
     const freezeCandidateIndex = argv.indexOf("--freeze-candidate");
     const validateCandidateIndex = argv.indexOf("--validate-candidate");
     if (freezeCandidateIndex >= 0 || validateCandidateIndex >= 0) {
@@ -808,13 +826,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const candidatePath = argv[optionIndex + 1];
       if (!candidatePath || candidatePath.startsWith("--")) throw new Error(`${argv[optionIndex]} requires a candidate manifest path`);
       if (freezeCandidateIndex >= 0) {
-        const candidate = createFrozenCandidateManifest();
+        const candidate = createFrozenCandidateManifest(new Date().toISOString(), profileID ?? ACTIVE_PRODUCTION_PROFILE_ID);
         mkdirSync(dirname(resolve(candidatePath)), { recursive: true });
         writeFileSync(candidatePath, `${JSON.stringify(candidate, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
         console.log(JSON.stringify({ candidate: candidatePath, manifestHash: candidate.manifestHash, providerRevision: candidate.providerRevision, servedVariant: candidate.servedVariant }));
       } else {
         const candidate = JSON.parse(readFileSync(candidatePath, "utf8")) as unknown;
         const validated = validateFrozenCandidateManifest(candidate);
+        if (profileID !== undefined && validated.candidate.modelProfile.id !== profileID) throw new Error("--model-profile does not match candidate profile");
         console.log(JSON.stringify({ candidate: candidatePath, manifestHash: validated.manifestHash, providerRevision: validated.providerRevision, servedVariant: validated.servedVariant }));
       }
       return 0;
@@ -827,6 +846,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const reportPath = argv[validateDevelopmentReportIndex + 1];
       if (!reportPath || reportPath.startsWith("--")) throw new Error("--validate-development-report requires a report path");
       const candidate = readFrozenCandidateManifest(candidatePath);
+      if (profileID !== undefined && candidate.candidate.modelProfile.id !== profileID) throw new Error("--model-profile does not match candidate profile");
       let value: unknown;
       try {
         value = JSON.parse(readFileSync(reportPath, "utf8"));
@@ -842,6 +862,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (artifactIndex >= 0 && (!artifactPath || artifactPath.startsWith("--"))) throw new Error("--artifact requires a development artifact path");
     if (argv.includes("--live")) {
       liveCandidate = readFrozenCandidateManifest(candidatePath);
+      if (profileID !== undefined && liveCandidate.candidate.modelProfile.id !== profileID) throw new Error("--model-profile does not match candidate profile");
       liveReportPath = artifactPath ?? DEVELOPMENT_REPORT_PATH;
       const report = await produceLiveQualification(liveReportPath, liveCandidate);
       console.log(JSON.stringify({ artifact: liveReportPath, generatedAt: report.generatedAt, status: report.terminal, providerCalls: report.development.providerCalls, classifierDenominator: report.development.classifierDenominator }));

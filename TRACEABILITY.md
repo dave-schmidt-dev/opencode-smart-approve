@@ -25,9 +25,11 @@ This release map is separate from the local-only task queue and history.
 The locked sample gate remains 40 benign, 15 dangerous, 10 ambiguous, 10
 injection, 10 secret, and 10 obfuscated/syntax fixtures; five repeats at
 temperature zero; 30-second timeout; 10-second p95; 2% other-repeat limit.
-Requested alias drift remains an accepted residual risk because the manifest is
-staleness-only and explicitly does not attest immutable model revision or served
-variant.
+The candidate stores one exact registry profile. `--model-profile <id>` selects
+it at freeze time; validation and live qualification otherwise infer it from the
+candidate. Requested alias drift remains an accepted residual risk because the
+manifest is staleness-only and explicitly does not attest immutable model
+revision or served variant.
 
 The fixed-candidate selector is `tests/eval/classifier-gate.test.ts` :: `freezes one source-current candidate with no provider or held-out attestation`; it covers the singular candidate, current hashes, unavailable provider/served-variant status, and empty spent-heldout arrays.
 

@@ -13,7 +13,7 @@ execution is uncertain.
 - Parse commands before classification; never classify from regexes alone.
 - Use deterministic parsing and policy only to force manual handling or prepare a
   bounded reviewer input; deterministic logic never grants permission in the MVP.
-- Require a qualified DeepSeek V4 Flash review for every automatic approval.
+- Require a qualified model-profile review for every automatic approval.
 - Never transmit suspected secrets to the reviewer.
 - Display review progress and use a configurable 30-second timeout.
 - Reply `once` only; every future occurrence is evaluated again.
@@ -73,8 +73,11 @@ This repository is not published to npm. A local checkout may be linked from the
 global OpenCode plugin loader for evaluation; keep native `bash: ask` enabled.
 `model.enabled=true` cannot enable automatic approvals in this release. Remove the
 loader entry to restore stock OpenCode; no session-data edit is required. OpenCode
-1.18.10 is the tested compatibility target, not a model qualification. DeepSeek V4
-Flash remains a candidate reviewer until an attended release draw passes.
+1.18.10 is the tested compatibility target, not a model qualification. DeepSeek
+V4 Flash remains the disabled production default. `src/reviewer/model-profile.ts`
+is the single registry for production and qualification identities; MiMo V2.5 is
+available as an A/B candidate and omits `variant` because OpenCode Go exposes no
+selectable variant for it.
 
 ## Development verification
 
@@ -94,8 +97,8 @@ The attended command requires `OPENCODE_AUTH_PATH` to point to the existing
 OpenCode auth file; pass the path only, never credential contents.
 
 The active evaluator reads only `fixtures/eval/development.json`; the historical
-combined corpus is diagnostic-only. v3 artifacts bind source, configuration,
-threshold, runtime, requested alias/variant, rubric, and custody-schema hashes as
+combined corpus is diagnostic-only. Current v4 qualification artifacts bind source, configuration,
+threshold, runtime, selected model profile, rubric, and custody-schema hashes as
 staleness checks. They explicitly do not attest immutable model revision or served
 variant. Private release evaluation is a human-custodian, one-use in-memory stream
 operation and public verification is not independently recomputable.
@@ -103,6 +106,8 @@ operation and public verification is not independently recomputable.
 After the offline evidence phase, the native candidate boundary is explicit:
 `bun run scripts/classifier-gate.ts --freeze-candidate eval-results/frozen-candidate-manifest.json`
 creates the sole source-current candidate, and `--validate-candidate` checks it.
+Add `--model-profile mimo-v2.5` to the freeze command for the MiMo A/B candidate;
+later validation and live qualification infer that frozen profile automatically.
 Neither command reads the private release stream or enables model approval.
 
 The automated fresh-corpus rehearsal is deliberately non-authoritative:

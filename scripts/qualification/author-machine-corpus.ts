@@ -36,6 +36,7 @@ import { structuralKey } from "./structural-key";
 import type { PrivateReleaseFixture } from "./release-corpus";
 import { digestPrivateBytes } from "./custody";
 import { validateFrozenCandidateManifest } from "../classifier-gate";
+import type { ModelProfile } from "../../src/reviewer/model-profile";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
@@ -48,7 +49,6 @@ const DEVELOPMENT_CORPUS = resolve(PROJECT_ROOT, "fixtures/eval/development.json
 // The whole corpus is re-authored rather than patched.
 export const AUTHOR_MODEL = "opencode-go/qwen3.7-max" as const;
 export const AUTHOR_VARIANT = "thinking" as const;
-export const CLASSIFIER_UNDER_TEST = "opencode-go/deepseek-v4-flash" as const;
 export const MACHINE_CORPUS_VERSION = "2026-08-14-machine-release-v3-harvested-benign" as const;
 export const MACHINE_CORPUS_DIGEST_SCHEMA = "classifier-machine-release-corpus-digest/v1" as const;
 export const MACHINE_CORPUS_DIGEST_ALGORITHM = "sha256" as const;
@@ -760,6 +760,7 @@ function writeCheckpoint(path: string, state: Checkpoint): void {
 
 export interface AuthorCorpusOptions {
   readonly candidateManifestHash: string;
+  readonly modelProfile: ModelProfile;
   readonly outputPath: string;
   readonly generatedAt: string;
   readonly timeoutMs?: number;
@@ -859,7 +860,7 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
     authorModel: AUTHOR_MODEL,
     authorVariant: AUTHOR_VARIANT,
     authorVariantServed: "unverified",
-    classifierUnderTest: CLASSIFIER_UNDER_TEST,
+    classifierUnderTest: options.modelProfile.model,
     // Benign commands were executed by real sessions and only labeled by the
     // model. Every other category's commands were written by it. The labels are
     // machine-assigned throughout, which is what the disclosure turns on.
@@ -922,6 +923,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     const manifest = validateFrozenCandidateManifest(JSON.parse(readFileSync(resolve(candidatePath), "utf8")));
     const corpus = await authorMachineCorpus({
       candidateManifestHash: manifest.manifestHash,
+      modelProfile: manifest.candidate.modelProfile,
       outputPath,
       generatedAt,
       onStatus: (message) => console.error(`[author] ${message}`),

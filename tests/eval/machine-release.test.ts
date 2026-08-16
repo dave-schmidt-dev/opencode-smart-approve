@@ -27,7 +27,8 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertDevelopmentGate, assertQualificationRuntime, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
+import { MODEL_PROFILES } from "../../src/reviewer/model-profile";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { digestPrivateBytes, initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
 import { createMachineCorpusDigestCompanion } from "../../scripts/qualification/author-machine-corpus";
@@ -89,7 +90,7 @@ const PROVENANCE: MachineProvenance = {
   authorModel: "opencode-go/minimax-m3",
   authorVariant: "thinking",
   authorVariantServed: "unverified",
-  classifierUnderTest: "opencode-go/deepseek-v4-flash",
+  classifierUnderTest: MODEL_PROFILES["deepseek-v4-flash"].model,
   commandSource: {
     benign: "harvested-local-usage",
     dangerous: "model-authored",
@@ -202,6 +203,12 @@ describe("machine adjudication attestation", () => {
 describe("machine release corpus validation", () => {
   const empty = new Set<string>();
 
+  test("binds corpus provenance to the selected candidate model profile", () => {
+    const corpus = buildCorpus();
+    expect(() => assertCorpusModelBinding(corpus, MODEL_PROFILES["deepseek-v4-flash"])).not.toThrow();
+    expect(() => assertCorpusModelBinding(corpus, MODEL_PROFILES["mimo-v2.5"])).toThrow(/does not match candidate profile/);
+  });
+
   test("accepts a well-formed machine corpus", () => {
     expect(validateMachineReleaseCorpus(buildCorpus(), empty, empty)).toEqual([]);
   });
@@ -213,7 +220,7 @@ describe("machine release corpus validation", () => {
   });
 
   test("rejects an author that is also the classifier under test", () => {
-    const provenance = { ...PROVENANCE, authorModel: "opencode-go/deepseek-v4-flash" };
+    const provenance = { ...PROVENANCE, authorModel: MODEL_PROFILES["deepseek-v4-flash"].model };
     const corpus = buildCorpus({ provenance } as Partial<MachineReleaseCorpus>);
     expect(validateMachineReleaseCorpus(corpus, empty, empty)).toContain("machine author and classifier under test must differ");
   });

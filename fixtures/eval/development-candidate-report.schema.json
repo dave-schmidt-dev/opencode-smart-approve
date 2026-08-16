@@ -1,17 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "classifier-development-report/v1",
+  "$id": "classifier-development-report/v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "generatedAt", "terminal", "opencodeVersion", "model", "variant", "candidateManifestHash", "hashes", "sourceManifest", "contract", "development", "faults", "aggregateDigest"],
+  "required": ["schemaVersion", "generatedAt", "terminal", "opencodeVersion", "modelProfile", "candidateManifestHash", "hashes", "sourceManifest", "contract", "development", "faults", "aggregateDigest"],
   "properties": {
-    "schemaVersion": { "const": "classifier-development-report/v1" },
+    "schemaVersion": { "const": "classifier-development-report/v2" },
     "generatedAt": { "type": "string", "minLength": 1 },
     "terminal": { "enum": ["development-pass", "stop-disabled"] },
     "failureCode": { "enum": ["invalid_run", "threshold", "runtime"] },
     "opencodeVersion": { "const": "1.18.10" },
-    "model": { "const": "opencode-go/deepseek-v4-flash" },
-    "variant": { "const": "max" },
+    "modelProfile": { "$ref": "#/$defs/modelProfile" },
     "candidateManifestHash": { "$ref": "#/$defs/digest" },
     "hashes": { "$ref": "#/$defs/hashes" },
     "sourceManifest": { "$ref": "#/$defs/sourceManifest" },
@@ -26,6 +25,15 @@
   ],
   "$defs": {
     "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "modelProfile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "providerID", "modelID", "model", "requestedVariant"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 }, "providerID": { "type": "string", "minLength": 1 },
+        "modelID": { "type": "string", "minLength": 1 }, "model": { "type": "string", "minLength": 1 },
+        "requestedVariant": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
     "hashes": {
       "type": "object",
       "additionalProperties": false,
@@ -52,18 +60,17 @@
         "immutableModelRevisionAttested": { "const": false },
         "servedVariantAttested": { "const": false },
         "files": { "type": "object", "additionalProperties": { "$ref": "#/$defs/digest" } },
-        "parameters": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },
+        "parameters": { "type": "object", "additionalProperties": false, "required": ["modelProfile", "temperature", "repeats", "timeoutMs", "maxP95Ms", "maxConcurrentReviewers"], "properties": { "modelProfile": { "$ref": "#/$defs/modelProfile" }, "temperature": { "const": 0 }, "repeats": { "const": 5 }, "timeoutMs": { "const": 30000 }, "maxP95Ms": { "const": 10000 }, "maxConcurrentReviewers": { "const": 4 } } },
         "manifestHash": { "$ref": "#/$defs/digest" }
       }
     },
     "contract": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "requestedAlias", "requestedVariant", "temperature", "repeats", "timeoutMs", "retryCount", "contractHash"],
+      "required": ["version", "modelProfile", "temperature", "repeats", "timeoutMs", "retryCount", "contractHash"],
       "properties": {
         "version": { "const": "classifier-qualification/v3" },
-        "requestedAlias": { "const": "opencode-go/deepseek-v4-flash" },
-        "requestedVariant": { "const": "max" },
+        "modelProfile": { "$ref": "#/$defs/modelProfile" },
         "temperature": { "const": 0 },
         "repeats": { "const": 5 },
         "timeoutMs": { "const": 30000 },

@@ -22,7 +22,7 @@ falls through to the native Bash prompt on uncertainty or budget exhaustion.
 The MVP is for a developer running OpenCode interactively who wants Codex- or
 Claude-like safe-command automation. The intended success case is routine low-risk
 commands proceeding without user action, every candidate command being reviewed by
-a qualified DeepSeek V4 Flash reviewer, and no error path turning into an automatic
+a qualified selected-profile reviewer, and no error path turning into an automatic
 approval. The current build does not meet that outcome: private release
 qualification is incomplete.
 The development branch has since been re-run against a frozen candidate and
@@ -156,8 +156,8 @@ shell command executed; manual states leave that decision with OpenCode and the 
 - Description: Every command eligible for auto-approval must receive a successful
   model review.
 - Acceptance criteria:
-  - [ ] Default reviewer is `opencode-go/deepseek-v4-flash`, variant `max`.
-  - [ ] Reviewer model, provider, variant, and timeout are configurable.
+  - [ ] Disabled production default is the active entry in `src/reviewer/model-profile.ts` (currently `opencode-go/deepseek-v4-flash`, variant `max`).
+  - [ ] Reviewer model, provider, optional variant, and timeout are configurable.
   - [ ] Reviewer receives only the redacted command representation, parser feature
     summary, policy facts, and project/external path classes.
   - [ ] Reviewer returns schema-validated JSON with decision `allow` or `manual`
@@ -263,7 +263,7 @@ shell command executed; manual states leave that decision with OpenCode and the 
 
 - Type: Quality
 - Priority: P0
-- Description: DeepSeek V4 Flash becomes the default only after a versioned,
+- Description: A selected model profile becomes the default only after a versioned,
   repeatable safety evaluation.
 - Acceptance criteria:
   - [ ] A versioned development corpus and a disjoint held-out release corpus each
@@ -290,8 +290,8 @@ shell command executed; manual states leave that decision with OpenCode and the 
 Phase 2 evidence contract: the active development evaluator reads only the
 development file at `fixtures/eval/development.json`. The historical combined
 corpus is diagnostic-only, and release or held-out inputs are rejected before
-any corpus read. The v3 source manifest binds behavior-affecting source,
-configuration, thresholds, runtime, requested alias/variant, rubric, and custody
+any corpus read. The current qualification artifact's source manifest binds behavior-affecting source,
+configuration, thresholds, runtime, selected model profile, rubric, and custody
 schemas as `staleness-only`; `immutableModelRevisionAttested` is explicitly
 `false`, and `servedVariantAttested` is explicitly `false`. Requested alias drift
 is an accepted residual risk, not provider authentication. Private release
@@ -306,8 +306,9 @@ manual.
 
 The fixed-candidate boundary is singular: `eval-results/frozen-candidate-manifest.json`
 contains one prompt/profile/model candidate, current source/config/threshold/runtime
-hashes, the requested alias and variant, and empty spent-heldout identifier/hash
-arrays. It records `providerRevision: unavailable` and `servedVariant: unavailable`;
+hashes, one canonical registry profile (including a nullable requested variant),
+and empty spent-heldout identifier/hash arrays. It records
+`providerRevision: unavailable` and `servedVariant: unavailable`;
 there is no selection or comparison list. The validator rejects any candidate drift
 before the human development gate begins.
 
@@ -460,7 +461,8 @@ because investigating it would require the same disclosure-risking probe
 used above and no further such probes are being run against this corpus.
 
 DeepSeek V4 Flash is not qualified and model-backed automatic approval must
-remain disabled. The blocker is no longer purely a model/prompt-wording
+remain disabled. MiMo V2.5 is an A/B candidate, not the production default, and
+has no qualification evidence yet. The blocker is no longer purely a model/prompt-wording
 question: it is a design contradiction between the reviewer prompt's
 conservative treatment of `env`/`cmp` and this specific corpus's benign
 labels for two fixtures using them, plus at least one unresolved zero-
@@ -646,8 +648,8 @@ permission authority without schema, state, and deterministic hard-block checks.
 1. Shell permission requests only.
 2. Native `bash: ask` remains enabled.
 3. Every automatic approval requires model review; deterministic policy cannot grant.
-4. DeepSeek V4 Flash is the candidate default, not trusted until qualification;
-   the current qualification has failed and is not shipped as an approval gate.
+4. DeepSeek V4 Flash remains the disabled production default. Candidate profiles,
+   including MiMo V2.5, are not trusted until qualification and do not change it.
 5. Repeated commands are re-evaluated and re-reviewed; verdicts are not cached.
 6. Automatic replies use `once` only.
 7. Default model timeout is 30 seconds and progress is visible.
@@ -701,6 +703,6 @@ Assumptions requiring implementation-time proof:
 - [OpenCode 1.18.10 plugin runtime](https://github.com/anomalyco/opencode/blob/v1.18.10/packages/opencode/src/plugin/index.ts)
 - [OpenCode 1.18.10 SDK documentation](https://github.com/anomalyco/opencode/blob/v1.18.10/packages/web/src/content/docs/sdk.mdx)
 - [Tree-sitter Bash grammar](https://github.com/tree-sitter/tree-sitter-bash)
-- [DeepSeek JSON output](https://api-docs.deepseek.com/guides/json_mode/)
+- [OpenCode Go model catalog](https://opencode.ai/docs/go/)
 - [OWASP LLM prompt injection prevention](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html)
 - [Existing smart-approval implementation](https://github.com/blanboom/opencode-smart-approval)

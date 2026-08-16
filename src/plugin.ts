@@ -57,7 +57,7 @@ export type ReviewerRegistration = AgentConfig & {
   readonly description: string;
   readonly mode: "subagent";
   readonly model: string;
-  readonly variant: string;
+  readonly variant?: string;
   readonly temperature: 0;
   readonly prompt: string;
 };
@@ -72,7 +72,7 @@ export function buildReviewerRegistration(config: SmartApproveConfig): ReviewerR
     description: "Tool-free command safety reviewer",
     mode: "subagent",
     model: `${config.model.provider}/${config.model.model}`,
-    variant: config.model.variant,
+    ...(config.model.variant === undefined ? {} : { variant: config.model.variant }),
     temperature: 0,
     prompt: "Classify only the supplied bounded data. Never use tools or request permissions. Return strict JSON only.",
     tools: REVIEWER_TOOL_DENY,
