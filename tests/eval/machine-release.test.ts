@@ -5,6 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CATEGORIES, MINIMUMS, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE, TERMINAL_KINDS } from "../../scripts/qualification/core";
 import {
+  createDevelopmentCandidateReport,
+  createFrozenCandidateManifest,
+  evaluateCorpus,
+  evaluateFaults,
+  hashQualificationRecord,
+  loadDevelopmentCorpus,
+  type QualificationRecord,
+} from "../../scripts/classifier-gate";
+import {
   MACHINE_AUTHORITY_DISCLOSURE,
   MACHINE_RELEASE_AUTHORITY,
   MACHINE_RELEASE_SCHEMA,
@@ -18,9 +27,10 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertQualificationRuntime, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertDevelopmentGate, assertQualificationRuntime, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
-import { initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
+import { digestPrivateBytes, initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
+import { createMachineCorpusDigestCompanion } from "../../scripts/qualification/author-machine-corpus";
 import { structuralKey } from "../../scripts/qualification/structural-key";
 import {
   NonRetryableAuthoringError,
@@ -36,6 +46,44 @@ import type { PrivateReleaseFixture } from "../../scripts/qualification/release-
 
 const CANDIDATE = "d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5";
 const AUTHORED_AT = "2026-08-14T20:36:54.164Z";
+
+function developmentGateFixture(terminal: "development-pass" | "stop-disabled" = "development-pass") {
+  const candidate = createFrozenCandidateManifest(AUTHORED_AT);
+  const { corpus } = loadDevelopmentCorpus();
+  const records = corpus.fixtures.flatMap((entry) => Array.from({ length: REPEAT_COUNT }, (_, index) => {
+    const deterministic = entry.errorPath === true || entry.category === "secret" || entry.category === "dangerous" || entry.category === "obfuscated";
+    const decision = entry.category === "benign" ? "allow" : "manual";
+    const base = {
+      observationID: `machine-release-development-${entry.id}-${index + 1}`,
+      fixtureID: entry.id,
+      category: entry.category,
+      repeat: index + 1,
+      expectedDecision: entry.expectedDecision,
+      decision,
+      route: deterministic ? "deterministic" : "reviewer",
+      providerAttempted: !deterministic,
+      reasonCodes: [deterministic ? "manual" : decision === "allow" ? "safe" : "ambiguous"],
+      schemaValid: true,
+      metricEligible: true,
+      outcome: "classifier",
+      terminalKind: deterministic ? "manual" : "valid_model",
+      latencyMs: 100 + index,
+    } as Omit<QualificationRecord, "responseHash">;
+    return { ...base, responseHash: hashQualificationRecord(base) };
+  }));
+  const report = evaluateCorpus("development", corpus, records);
+  return {
+    candidate,
+    report: createDevelopmentCandidateReport({
+      candidate,
+      corpusReport: report,
+      faults: evaluateFaults([]),
+      terminal,
+      ...(terminal === "stop-disabled" ? { failureCode: "threshold" as const } : {}),
+      generatedAt: AUTHORED_AT,
+    }),
+  };
+}
 
 const PROVENANCE: MachineProvenance = {
   authorModel: "opencode-go/minimax-m3",
@@ -682,6 +730,8 @@ describe("authoring shape reservation", () => {
     expect(parseCandidateFlag(["a", "b"])).toEqual({ rest: ["a", "b"] });
     expect(parseCandidateFlag(["--candidate", "m.json", "corpus", "ledger"])).toEqual({ candidatePath: "m.json", rest: ["corpus", "ledger"] });
     expect(parseCandidateFlag(["corpus", "--candidate", "m.json", "ledger"])).toEqual({ candidatePath: "m.json", rest: ["corpus", "ledger"] });
+    expect(parseCandidateFlag(["--development-report", "development.json", "corpus", "ledger"])).toEqual({ developmentReportPath: "development.json", rest: ["corpus", "ledger"] });
+    expect(parseCandidateFlag(["corpus", "--candidate", "m.json", "--development-report", "development.json", "ledger"])).toEqual({ candidatePath: "m.json", developmentReportPath: "development.json", rest: ["corpus", "ledger"] });
     expect(() => parseCandidateFlag(["corpus", "--candidate"])).toThrow("requires a path");
     // A following flag is a missing value, not the path.
     expect(() => parseCandidateFlag(["--candidate", "--attended"])).toThrow("requires a path");
@@ -690,6 +740,10 @@ describe("authoring shape reservation", () => {
     expect(() => parseCandidateFlag(["--candidate=m.json", "corpus"])).toThrow("separate argument");
     expect(() => parseCandidateFlag(["--candidate", "a.json", "--candidate", "b.json"])).toThrow("more than once");
     expect(() => parseCandidateFlag(["--candidate", "--candidate", "b.json"])).toThrow("more than once");
+    expect(() => parseCandidateFlag(["--development-report=development.json", "corpus"])).toThrow("separate argument");
+    expect(() => parseCandidateFlag(["--development-report", "a.json", "--development-report", "b.json"])).toThrow("more than once");
+    expect(() => parseCandidateFlag(["--development-report"])).toThrow("requires a path");
+    expect(() => parseCandidateFlag(["--development-report", "--candidate", "candidate.json"])).toThrow("requires a path");
   });
 
   test("command heads cover every pipeline segment", () => {
@@ -699,6 +753,162 @@ describe("authoring shape reservation", () => {
 });
 
 describe("runtime preflight ordering", () => {
+  async function expectPreSpendFailure(input: {
+    readonly candidatePath: string;
+    readonly developmentReportPath: string;
+    readonly ledgerPath: string;
+    readonly error: RegExp;
+  }): Promise<void> {
+    initializeCustodyLedger(input.ledgerPath);
+    await expect(runMachineRelease({
+      corpusPath: join(input.ledgerPath, "private-corpus-that-must-not-be-read.json"),
+      ledgerPath: input.ledgerPath,
+      aggregatePath: join(input.ledgerPath, "aggregate.json"),
+      generatedAt: AUTHORED_AT,
+      candidatePath: input.candidatePath,
+      developmentReportPath: input.developmentReportPath,
+    })).rejects.toThrow(input.error);
+    expect(readCustodyLedger(input.ledgerPath).state).toBe("available");
+    expect(readCustodyLedger(input.ledgerPath).consumptionNumber).toBe(0);
+  }
+
+  test("a valid development pass is checked before custody and private input", async () => {
+    const root = mkdtempSync(join(tmpdir(), "machine-release-development-pass-"));
+    const previous = process.env.OPENCODE_AUTH_PATH;
+    delete process.env.OPENCODE_AUTH_PATH;
+    try {
+      const gate = developmentGateFixture();
+      const candidatePath = join(root, "candidate.json");
+      const developmentReportPath = join(root, "development.json");
+      const ledgerPath = join(root, "ledger.json");
+      writeFileSync(candidatePath, `${JSON.stringify(gate.candidate)}\n`);
+      writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
+      expect(() => assertDevelopmentGate(gate.candidate, developmentReportPath)).not.toThrow();
+      await expectPreSpendFailure({ candidatePath, developmentReportPath, ledgerPath, error: /OPENCODE_AUTH_PATH/ });
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_AUTH_PATH;
+      else process.env.OPENCODE_AUTH_PATH = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing or stale development report cannot spend custody", async () => {
+    for (const mode of ["missing", "stale"] as const) {
+      const root = mkdtempSync(join(tmpdir(), `machine-release-development-${mode}-`));
+      const previous = process.env.OPENCODE_AUTH_PATH;
+      delete process.env.OPENCODE_AUTH_PATH;
+      try {
+        const gate = developmentGateFixture();
+        const candidatePath = join(root, "candidate.json");
+        const developmentReportPath = join(root, "development.json");
+        const ledgerPath = join(root, "ledger.json");
+        writeFileSync(candidatePath, `${JSON.stringify(gate.candidate)}\n`);
+        if (mode === "stale") writeFileSync(developmentReportPath, `${JSON.stringify({ ...gate.report, candidateManifestHash: "0".repeat(64) })}\n`);
+        await expectPreSpendFailure({ candidatePath, developmentReportPath, ledgerPath, error: mode === "missing" ? /ENOENT|no such file/ : /development report candidate binding is stale/ });
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODE_AUTH_PATH;
+        else process.env.OPENCODE_AUTH_PATH = previous;
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a stop-disabled development report is rejected before custody", async () => {
+    const root = mkdtempSync(join(tmpdir(), "machine-release-development-stopped-"));
+    const previous = process.env.OPENCODE_AUTH_PATH;
+    delete process.env.OPENCODE_AUTH_PATH;
+    try {
+      const gate = developmentGateFixture("stop-disabled");
+      const candidatePath = join(root, "candidate.json");
+      const developmentReportPath = join(root, "development.json");
+      const ledgerPath = join(root, "ledger.json");
+      writeFileSync(candidatePath, `${JSON.stringify(gate.candidate)}\n`);
+      writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
+      await expectPreSpendFailure({ candidatePath, developmentReportPath, ledgerPath, error: /requires a development-pass report/ });
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_AUTH_PATH;
+      else process.env.OPENCODE_AUTH_PATH = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing digest companion is rejected before custody", async () => {
+    const root = mkdtempSync(join(tmpdir(), "machine-release-digest-missing-"));
+    const previous = process.env.OPENCODE_AUTH_PATH;
+    try {
+      const gate = developmentGateFixture();
+      const candidatePath = join(root, "candidate.json");
+      const developmentReportPath = join(root, "development.json");
+      const corpusPath = join(root, "corpus.json");
+      const ledgerPath = join(root, "ledger.json");
+      writeFileSync(candidatePath, `${JSON.stringify(gate.candidate)}\n`);
+      writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
+      process.env.OPENCODE_AUTH_PATH = candidatePath;
+      initializeCustodyLedger(ledgerPath);
+      await expect(runMachineRelease({ corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/ENOENT|no such file/);
+      expect(readCustodyLedger(ledgerPath).state).toBe("available");
+      expect(readCustodyLedger(ledgerPath).consumptionNumber).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_AUTH_PATH;
+      else process.env.OPENCODE_AUTH_PATH = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing private corpus is opened only after custody is spent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "machine-release-corpus-missing-"));
+    const previous = process.env.OPENCODE_AUTH_PATH;
+    try {
+      const gate = developmentGateFixture();
+      const candidatePath = join(root, "candidate.json");
+      const developmentReportPath = join(root, "development.json");
+      const corpusPath = join(root, "missing-corpus.json");
+      const ledgerPath = join(root, "ledger.json");
+      const corpusBytes = "{}\n";
+      writeFileSync(candidatePath, `${JSON.stringify(gate.candidate)}\n`);
+      writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
+      writeFileSync(`${corpusPath}.digest.json`, `${JSON.stringify(createMachineCorpusDigestCompanion({ candidateManifestHash: gate.candidate.manifestHash, corpusBytes }))}\n`);
+      process.env.OPENCODE_AUTH_PATH = candidatePath;
+      await expect(runMachineRelease({ corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/ENOENT|no such file/);
+      const after = readCustodyLedger(ledgerPath);
+      expect(after.state).toBe("spent");
+      expect(after.consumptionNumber).toBe(1);
+      expect(after.corpusDigest).toBe(digestPrivateBytes(corpusBytes));
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_AUTH_PATH;
+      else process.env.OPENCODE_AUTH_PATH = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a private corpus digest mismatch remains spent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "machine-release-corpus-mismatch-"));
+    const previous = process.env.OPENCODE_AUTH_PATH;
+    try {
+      const gate = developmentGateFixture();
+      const candidatePath = join(root, "candidate.json");
+      const developmentReportPath = join(root, "development.json");
+      const corpusPath = join(root, "corpus.json");
+      const ledgerPath = join(root, "ledger.json");
+      const actualBytes = "{}\n";
+      const declaredBytes = '{"different":true}\n';
+      writeFileSync(candidatePath, `${JSON.stringify(gate.candidate)}\n`);
+      writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
+      writeFileSync(corpusPath, actualBytes);
+      writeFileSync(`${corpusPath}.digest.json`, `${JSON.stringify(createMachineCorpusDigestCompanion({ candidateManifestHash: gate.candidate.manifestHash, corpusBytes: declaredBytes }))}\n`);
+      process.env.OPENCODE_AUTH_PATH = candidatePath;
+      await expect(runMachineRelease({ corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/digest does not match/);
+      const after = readCustodyLedger(ledgerPath);
+      expect(after.state).toBe("spent");
+      expect(after.consumptionNumber).toBe(1);
+      expect(after.corpusDigest).toBe(digestPrivateBytes(declaredBytes));
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_AUTH_PATH;
+      else process.env.OPENCODE_AUTH_PATH = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a runtime failure leaves custody unspent", async () => {
     // Regression: the preflight used to live inside `runBlindedDraw`, which
     // runs *after* `spendBeforePrivateInput`. An unset OPENCODE_AUTH_PATH
@@ -706,10 +916,15 @@ describe("runtime preflight ordering", () => {
     const root = mkdtempSync(join(tmpdir(), "machine-release-preflight-"));
     const ledgerPath = join(root, "ledger.json");
     const corpusPath = join(root, "corpus.json");
-    // The corpus must exist, or `readFileSync` would throw ahead of the spend
-    // and the test would pass with or without the ordering fix. Its contents do
-    // not matter: parsing and validation both happen after custody is spent.
+    // The valid candidate/report above ensure this reaches runtime preflight;
+    // the corpus contents do not matter because the missing auth path fails
+    // before custody initialization or private input is read.
     writeFileSync(corpusPath, "{}\n");
+    const gate = developmentGateFixture();
+    const candidatePath = join(root, "candidate.json");
+    const developmentReportPath = join(root, "development.json");
+    writeFileSync(candidatePath, `${JSON.stringify(gate.candidate)}\n`);
+    writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
     const previous = process.env.OPENCODE_AUTH_PATH;
     delete process.env.OPENCODE_AUTH_PATH;
     try {
@@ -720,6 +935,8 @@ describe("runtime preflight ordering", () => {
         ledgerPath,
         aggregatePath: join(root, "aggregate.json"),
         generatedAt: AUTHORED_AT,
+        candidatePath,
+        developmentReportPath,
       })).rejects.toThrow();
       const after = readCustodyLedger(ledgerPath);
       expect(after.state).toBe("available");

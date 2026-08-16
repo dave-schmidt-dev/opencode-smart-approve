@@ -15,6 +15,7 @@ This release map is separate from the local-only task queue and history.
 | TASK-009 | REQ-012 | tests/package/package.test.ts; tests/spec/traceability.test.ts; tests/e2e/opencode-1.18.10.test.ts |
 | TASK-010 | REQ-013 | tests/spec/traceability.test.ts |
 | TASK-011 | REQ-014 | tests/unit/config.test.ts; tests/unit/shell-policy.test.ts; tests/unit/replan-guidance.test.ts; tests/integration/replan-guard.test.ts; tests/integration/fail-closed-to-auto.test.ts; tests/integration/progress.test.ts; tests/security/audit-redaction.test.ts; tests/e2e/opencode-contract-canary.test.ts; tests/e2e/opencode-1.18.10.test.ts |
+| TASK-025 | REQ-011 | tests/eval/machine-release.test.ts |
 
 ## REQ-011 selector evidence
 
@@ -51,11 +52,12 @@ are covered by `tests/eval/release-corpus.test.ts` and
 and production/evaluation parity are covered by
 `tests/eval/reviewer-contract-parity.test.ts`.
 The machine-adjudicated path — corpus authority, provenance disclosure, custody
-ordering, and the candidate binding — is covered by
-`tests/eval/machine-release.test.ts`. One precondition is covered on the human
-path only: `release-operator.ts` requires a source-current `development-pass`
-report bound to the same candidate, asserted in `tests/eval/release-operator.test.ts`,
-and `machine-release.ts` has no equivalent check or test.
+ordering, candidate binding, and the source-current `development-pass` gate — is
+covered by `tests/eval/machine-release.test.ts`. The machine gate tests valid,
+missing, stale, and `stop-disabled` reports before custody, plus strict named
+flag parsing for candidate and development-report paths. The same suites cover
+the public raw-byte digest companion, pre-spend sidecar rejection, post-spend
+missing-corpus handling, and spent-custody digest mismatch handling.
 The release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`; it is `release-disabled` on
 classifier evidence, not on authorship — the 2026-08-14 owner decision under

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
-import { authorCategory, reviewerManualLabelConflicts, type AuthoredCommand } from "../../scripts/qualification/author-machine-corpus";
+import { authorCategory, createMachineCorpusDigestCompanion, machineCorpusDigestPath, reviewerManualLabelConflicts, validateMachineCorpusDigestCompanion, type AuthoredCommand } from "../../scripts/qualification/author-machine-corpus";
 import { promptInstructsAllow } from "../../scripts/qualification/harvest-usage";
 import { structuralKey } from "../../scripts/qualification/structural-key";
 
@@ -12,6 +12,18 @@ async function route(command: string): Promise<boolean> {
 }
 
 describe("machine corpus manual-side prompt label filter", () => {
+  test("builds and strictly validates a public raw-byte digest companion", () => {
+    const corpusBytes = '{"privateFixture":"must not enter the companion"}\n';
+    const candidateManifestHash = "a".repeat(64);
+    const companion = createMachineCorpusDigestCompanion({ candidateManifestHash, corpusBytes });
+    expect(validateMachineCorpusDigestCompanion(companion, candidateManifestHash)).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(companion)).not.toContain("privateFixture");
+    expect(machineCorpusDigestPath("/tmp/corpus.json")).toBe("/tmp/corpus.json.digest.json");
+    expect(() => validateMachineCorpusDigestCompanion({ ...companion, extra: "no" }, candidateManifestHash)).toThrow(/unknown or missing fields/);
+    expect(() => validateMachineCorpusDigestCompanion({ ...companion, corpusDigest: "not-a-digest" }, candidateManifestHash)).toThrow(/digest is invalid/);
+    expect(() => validateMachineCorpusDigestCompanion(companion, "b".repeat(64))).toThrow(/candidate binding is stale/);
+  });
+
   test("rejects ambiguous reviewer candidates the prompt tells the model to allow", async () => {
     for (const command of ["basename src/plugin.ts", "head -100 SPEC.md", "date -r package.json"]) {
       expect(await route(command)).toBe(true);

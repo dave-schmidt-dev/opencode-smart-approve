@@ -137,6 +137,7 @@ describe("spec traceability", () => {
       "TASK-009",
       "TASK-010",
       "TASK-011",
+      "TASK-025",
     ]);
   });
 

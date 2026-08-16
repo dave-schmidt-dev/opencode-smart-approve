@@ -46,8 +46,13 @@ import {
   type BlindedFixture,
   type MachineReleaseCorpus,
 } from "./machine-authority";
-import { assertObservedRoutes, developmentShapeSets } from "./author-machine-corpus";
-import { validateFrozenCandidateManifest } from "../classifier-gate";
+import { assertObservedRoutes, developmentShapeSets, machineCorpusDigestPath, validateMachineCorpusDigestCompanion } from "./author-machine-corpus";
+import {
+  DEVELOPMENT_REPORT_PATH,
+  validateDevelopmentCandidateReport,
+  validateFrozenCandidateManifest,
+  type FrozenCandidateManifest,
+} from "../classifier-gate";
 import {
   createSignedConsumptionCommitment,
   digestPrivateBytes,
@@ -210,9 +215,19 @@ async function waitForServer(baseUrl: string, child: { exitCode: number | null }
  * or both sides agree on a hash that no longer describes the source.
  */
 export function assertCandidateBinding(boundHash?: string, manifestPath = resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json")): string {
-  const manifest = validateFrozenCandidateManifest(JSON.parse(readFileSync(manifestPath, "utf8")));
+  const manifest = readCandidateManifest(manifestPath);
   if (boundHash !== undefined && manifest.manifestHash !== boundHash) throw new Error(`corpus is bound to candidate ${boundHash.slice(0, 8)} but the current candidate is ${manifest.manifestHash.slice(0, 8)}`);
   return manifest.manifestHash;
+}
+
+function readCandidateManifest(manifestPath: string): FrozenCandidateManifest {
+  return validateFrozenCandidateManifest(JSON.parse(readFileSync(resolve(manifestPath), "utf8")));
+}
+
+/** Validate the source-current development gate before any release custody work. */
+export function assertDevelopmentGate(candidate: FrozenCandidateManifest, reportPath = DEVELOPMENT_REPORT_PATH): void {
+  const report = validateDevelopmentCandidateReport(JSON.parse(readFileSync(resolve(reportPath), "utf8")), candidate);
+  if (report.terminal !== "development-pass") throw new Error("machine release requires a development-pass report");
 }
 
 export function assertQualificationRuntime(): string {
@@ -461,23 +476,30 @@ export interface MachineReleaseOptions {
    * corpus. Both halves now name the manifest explicitly.
    */
   readonly candidatePath?: string;
+  /**
+   * Source-current aggregate development report required for every machine
+   * release draw. Defaults to the canonical evaluator artifact.
+   */
+  readonly developmentReportPath?: string;
   readonly onStatus?: (message: string) => void;
 }
 
 export async function runMachineRelease(options: MachineReleaseOptions): Promise<MachineAggregate> {
   const onStatus = options.onStatus ?? (() => undefined);
-  // Every irreversible step is below this line. Fail on a missing binary, a
-  // wrong OpenCode version, an unset auth path, or a candidate manifest that no
-  // longer describes this checkout, while the ledger is still `available` — an
-  // environment or staleness mistake must not consume a one-use custody.
-  assertQualificationRuntime();
   // Resolved like every other caller-supplied path here, so a relative
   // `--candidate` is read against the operator's cwd rather than left to
   // whatever happens to be current when the read lands.
   const candidatePath = options.candidatePath ? resolve(options.candidatePath) : resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json");
-  assertCandidateBinding(undefined, candidatePath);
-  const corpusBytes = readFileSync(resolve(options.corpusPath), "utf8");
-  const corpusDigest = digestPrivateBytes(corpusBytes);
+  const candidate = readCandidateManifest(candidatePath);
+  assertDevelopmentGate(candidate, options.developmentReportPath ?? DEVELOPMENT_REPORT_PATH);
+  // Every irreversible step is below this line. Fail on a missing binary, a
+  // wrong OpenCode version, or an unset auth path while the ledger is still
+  // `available` — an environment mistake must not consume a one-use custody.
+  assertQualificationRuntime();
+  const corpusPath = resolve(options.corpusPath);
+  const digestPath = machineCorpusDigestPath(corpusPath);
+  const digestCompanion = validateMachineCorpusDigestCompanion(JSON.parse(readFileSync(digestPath, "utf8")), candidate.manifestHash);
+  if (existsSync(resolve(options.aggregatePath))) throw new Error("machine release aggregate already exists");
   // The commitment is machine-generated and labeled as such. It binds this run
   // to these exact bytes; it is not a stand-in for a custodian's signature.
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -492,9 +514,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   }
   const current = readCustodyLedger(options.ledgerPath);
   const consumptionNumber = current.state === "reserved" ? current.consumptionNumber : current.consumptionNumber + 1;
-  const commitment: SignedConsumptionCommitment = createSignedConsumptionCommitment({ corpusDigest, consumptionNumber, privateKey, publicKey });
-
-  if (existsSync(resolve(options.aggregatePath))) throw new Error("machine release aggregate already exists");
+  const commitment: SignedConsumptionCommitment = createSignedConsumptionCommitment({ corpusDigest: digestCompanion, consumptionNumber, privateKey, publicKey });
   mkdirSync(dirname(resolve(options.aggregatePath)), { recursive: true, mode: 0o700 });
 
   // Spend first, then open. An interrupted run leaves the ledger spent, so the
@@ -503,6 +523,8 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const spent = spendBeforePrivateInput(options.ledgerPath, commitment);
   onStatus(`custody: spent (consumption ${spent.consumptionNumber})`);
 
+  const corpusBytes = readFileSync(corpusPath, "utf8");
+  if (digestPrivateBytes(corpusBytes) !== digestCompanion) throw new Error("machine release corpus digest does not match its public companion");
   const corpus = JSON.parse(corpusBytes) as MachineReleaseCorpus;
   const development = developmentShapeSets();
   const errors = validateMachineReleaseCorpus(corpus, development.ids, development.shapes);
@@ -510,7 +532,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // The corpus binding is only a well-formed digest to `validateMachineReleaseCorpus`.
   // Tie it to the candidate this run actually executes against, so the aggregate
   // cannot name a candidate that never produced it.
-  assertCandidateBinding(corpus.bindings.candidateManifestHash, candidatePath);
+  if (corpus.bindings.candidateManifestHash !== candidate.manifestHash) throw new Error(`corpus is bound to candidate ${corpus.bindings.candidateManifestHash.slice(0, 8)} but the current candidate is ${candidate.manifestHash.slice(0, 8)}`);
   // Every route in the corpus is a claim about this checkout's policy. Check the
   // claims against the policy before the draw, or a wrong one is scored as a
   // classifier result. Custody is already spent by here — the commands are
@@ -523,40 +545,53 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const blinded = blindFixtures(corpus.release);
   onStatus(`blinded ${blinded.length} fixtures; ${corpus.release.filter((fixture) => fixture.route === "reviewer").length} are reviewer-routed`);
   const results = await runBlindedDraw({ blinded, onStatus });
-  const aggregate = scoreMachineRun({ corpus, results, corpusDigest, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt });
+  const aggregate = scoreMachineRun({ corpus, results, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt });
   await Bun.write(resolve(options.aggregatePath), `${JSON.stringify(aggregate, null, 2)}\n`);
   return aggregate;
 }
 
 /**
- * Split `--candidate <path>` out of the argument list.
+ * Split the optional named artifact paths out of the positional arguments.
  *
- * Named, not positional: the candidate is optional, and it is the one argument
- * an operator must not get wrong by miscounting. Separated from `main` so the
- * stripping is testable without a provider, a runtime, or a custody spend.
+ * Named, not positional: both paths are optional, and an operator must not get
+ * either one wrong by miscounting. Separated from `main` so the stripping is
+ * testable without a provider, a runtime, or a custody spend.
  */
-export function parseCandidateFlag(argv: readonly string[]): { readonly candidatePath?: string; readonly rest: readonly string[] } {
+export function parseCandidateFlag(argv: readonly string[]): { readonly candidatePath?: string; readonly developmentReportPath?: string; readonly rest: readonly string[] } {
   // Reject the shapes that would otherwise resolve to a candidate nobody chose.
   // `--candidate=<path>` does not match the bare token, so it would survive into
   // the positional list and be read as the corpus path; a second `--candidate`
   // would leave the first silently winning while its own flag and path shifted
   // every positional argument by two. Both are exactly the miscount this flag
   // exists to prevent, so both stop the run instead of guessing.
-  const joined = argv.find((argument) => argument.startsWith("--candidate="));
-  if (joined !== undefined) throw new Error("--candidate takes its path as a separate argument, not --candidate=<path>");
-  const index = argv.indexOf("--candidate");
-  if (index < 0) return { rest: argv };
-  if (argv.indexOf("--candidate", index + 1) >= 0) throw new Error("--candidate given more than once");
-  const candidatePath = argv[index + 1];
-  if (candidatePath === undefined || candidatePath.startsWith("--")) throw new Error("--candidate requires a path");
-  return { candidatePath, rest: [...argv.slice(0, index), ...argv.slice(index + 2)] };
+  let rest = [...argv];
+  let candidatePath: string | undefined;
+  let developmentReportPath: string | undefined;
+  for (const name of ["--candidate", "--development-report"] as const) {
+    const joined = rest.find((argument) => argument.startsWith(`${name}=`));
+    if (joined !== undefined) throw new Error(`${name} takes its path as a separate argument, not ${name}=<path>`);
+    const index = rest.indexOf(name);
+    if (index < 0) continue;
+    if (rest.indexOf(name, index + 1) >= 0) throw new Error(`${name} given more than once`);
+    const value = rest[index + 1];
+    if (value === undefined || value.startsWith("--")) throw new Error(`${name} requires a path`);
+    if (name === "--candidate") candidatePath = value;
+    else developmentReportPath = value;
+    rest = [...rest.slice(0, index), ...rest.slice(index + 2)];
+  }
+  return {
+    ...(candidatePath === undefined ? {} : { candidatePath }),
+    ...(developmentReportPath === undefined ? {} : { developmentReportPath }),
+    rest,
+  };
 }
 
 export async function main(rawArgv = process.argv.slice(2)): Promise<number> {
   let candidatePath: string | undefined;
+  let developmentReportPath: string | undefined;
   let argv: readonly string[];
   try {
-    ({ candidatePath, rest: argv } = parseCandidateFlag(rawArgv));
+    ({ candidatePath, developmentReportPath, rest: argv } = parseCandidateFlag(rawArgv));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;
@@ -566,14 +601,14 @@ export async function main(rawArgv = process.argv.slice(2)): Promise<number> {
   const aggregatePath = argv[2] ?? resolve(PROJECT_ROOT, "eval-results/machine-release-aggregate.json");
   const generatedAt = argv[3];
   if (!generatedAt) {
-    console.error("usage: machine-release.ts [--candidate <manifest>] <corpus> <ledger> <aggregate> <iso-timestamp> [prior-consumptions-json]");
+    console.error("usage: machine-release.ts [--candidate <manifest>] [--development-report <report>] <corpus> <ledger> <aggregate> <iso-timestamp> [prior-consumptions-json]");
     return 1;
   }
   // Declaring a prior consumption is a disclosure, not a bypass: it raises this
   // run's recorded consumption number and stamps the reason into the aggregate.
   const priorConsumptions = argv[4] ? JSON.parse(argv[4]) as readonly { consumptionNumber: number; reason: string }[] : undefined;
   try {
-    const aggregate = await runMachineRelease({ corpusPath, ledgerPath, aggregatePath, generatedAt, priorConsumptions, candidatePath, onStatus: (message) => console.error(`[machine-release] ${message}`) });
+    const aggregate = await runMachineRelease({ corpusPath, ledgerPath, aggregatePath, generatedAt, priorConsumptions, candidatePath, developmentReportPath, onStatus: (message) => console.error(`[machine-release] ${message}`) });
     console.log(JSON.stringify({ terminal: aggregate.terminal, custodyNumber: aggregate.custodyNumber, observations: aggregate.observations, providerCalls: aggregate.providerCalls, criticalFalseApprovals: `${aggregate.criticalFalseApprovals}/${aggregate.criticalDenominator}`, benignFalseManual: `${aggregate.benignFalseManual}/${aggregate.benignDenominator}`, p95LatencyMs: aggregate.p95LatencyMs, failures: aggregate.failures }, null, 2));
     return aggregate.terminal === "machine-release-pass" ? 0 : 2;
   } catch (error) {

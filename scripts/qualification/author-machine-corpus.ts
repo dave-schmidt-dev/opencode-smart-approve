@@ -8,8 +8,9 @@
  * list of structural shapes to avoid, so the release stratum stays disjoint
  * from development without being derived from it.
  *
- * This script writes a private corpus and nothing else. It does not run the
- * classifier, spend custody, or touch the release gate.
+ * This script writes a private corpus and a public raw-byte digest companion;
+ * the companion contains no fixture data. It does not run the classifier,
+ * spend custody, or touch the release gate.
  */
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -33,6 +34,7 @@ import {
 import { commandFamily, harvestBenignCommands, promptInstructsAllow } from "./harvest-usage";
 import { structuralKey } from "./structural-key";
 import type { PrivateReleaseFixture } from "./release-corpus";
+import { digestPrivateBytes } from "./custody";
 import { validateFrozenCandidateManifest } from "../classifier-gate";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -48,6 +50,47 @@ export const AUTHOR_MODEL = "opencode-go/qwen3.7-max" as const;
 export const AUTHOR_VARIANT = "thinking" as const;
 export const CLASSIFIER_UNDER_TEST = "opencode-go/deepseek-v4-flash" as const;
 export const MACHINE_CORPUS_VERSION = "2026-08-14-machine-release-v3-harvested-benign" as const;
+export const MACHINE_CORPUS_DIGEST_SCHEMA = "classifier-machine-release-corpus-digest/v1" as const;
+export const MACHINE_CORPUS_DIGEST_ALGORITHM = "sha256" as const;
+export const MACHINE_CORPUS_DIGEST_PURPOSE = "byte-identity-only" as const;
+const HEX_DIGEST = /^[0-9a-f]{64}$/;
+
+export interface MachineCorpusDigestCompanion {
+  readonly schemaVersion: typeof MACHINE_CORPUS_DIGEST_SCHEMA;
+  readonly algorithm: typeof MACHINE_CORPUS_DIGEST_ALGORITHM;
+  readonly candidateManifestHash: string;
+  readonly corpusDigest: string;
+  readonly authority: typeof MACHINE_RELEASE_AUTHORITY;
+  readonly purpose: typeof MACHINE_CORPUS_DIGEST_PURPOSE;
+}
+
+/** Build the public raw-byte digest companion without copying private fixtures. */
+export function createMachineCorpusDigestCompanion(input: { readonly candidateManifestHash: string; readonly corpusBytes: string }): MachineCorpusDigestCompanion {
+  if (!HEX_DIGEST.test(input.candidateManifestHash)) throw new Error("candidateManifestHash must be a SHA-256 hex digest");
+  return {
+    schemaVersion: MACHINE_CORPUS_DIGEST_SCHEMA,
+    algorithm: MACHINE_CORPUS_DIGEST_ALGORITHM,
+    candidateManifestHash: input.candidateManifestHash,
+    corpusDigest: digestPrivateBytes(input.corpusBytes),
+    authority: MACHINE_RELEASE_AUTHORITY,
+    purpose: MACHINE_CORPUS_DIGEST_PURPOSE,
+  };
+}
+
+/** Validate a digest companion and return the bound raw-byte digest. */
+export function validateMachineCorpusDigestCompanion(value: unknown, candidateManifestHash: string): string {
+  if (typeof value !== "object" || value === null) throw new Error("machine corpus digest companion is not an object");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== ["algorithm", "authority", "candidateManifestHash", "corpusDigest", "purpose", "schemaVersion"].join(",")) throw new Error("machine corpus digest companion has unknown or missing fields");
+  if (record.schemaVersion !== MACHINE_CORPUS_DIGEST_SCHEMA || record.algorithm !== MACHINE_CORPUS_DIGEST_ALGORITHM || record.authority !== MACHINE_RELEASE_AUTHORITY || record.purpose !== MACHINE_CORPUS_DIGEST_PURPOSE) throw new Error("machine corpus digest companion metadata is invalid");
+  if (!HEX_DIGEST.test(candidateManifestHash) || record.candidateManifestHash !== candidateManifestHash) throw new Error("machine corpus digest companion candidate binding is stale");
+  if (typeof record.corpusDigest !== "string" || !HEX_DIGEST.test(record.corpusDigest)) throw new Error("machine corpus digest companion digest is invalid");
+  return record.corpusDigest;
+}
+
+export function machineCorpusDigestPath(outputPath: string): string {
+  return `${outputPath}.digest.json`;
+}
 
 /**
  * The reviewer only ever judges commands the deterministic layer forwards.
@@ -732,7 +775,9 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   // matters as much as the output check: the attestation demands millisecond
   // precision, and a second-precision argument only surfaces at signing time,
   // once every category has already converged.
+  const digestPath = machineCorpusDigestPath(absolute);
   if (existsSync(absolute)) throw new Error("machine release corpus already exists");
+  if (existsSync(digestPath)) throw new Error("machine release corpus digest companion already exists");
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(options.generatedAt)) {
     throw new Error(`generatedAt must be an ISO-8601 UTC millisecond timestamp, got ${options.generatedAt}`);
   }
@@ -848,12 +893,16 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   if (errors.length > 0) throw new Error(`authored corpus failed validation: ${errors.join("; ")}`);
 
   mkdirSync(dirname(absolute), { recursive: true, mode: 0o700 });
-  writeFileSync(absolute, `${JSON.stringify(corpus, null, 2)}\n`, { mode: 0o600 });
+  const corpusBytes = `${JSON.stringify(corpus, null, 2)}\n`;
+  const digestCompanion = createMachineCorpusDigestCompanion({ candidateManifestHash: options.candidateManifestHash, corpusBytes });
+  writeFileSync(absolute, corpusBytes, { mode: 0o600 });
   chmodSync(absolute, 0o600);
+  writeFileSync(digestPath, `${JSON.stringify(digestCompanion, null, 2)}\n`, { mode: 0o644 });
+  chmodSync(digestPath, 0o644);
   // The corpus is now the record; the scratch checkpoint would only let a later
   // run silently resume against a corpus that already exists.
   if (existsSync(checkpointPath)) rmSync(checkpointPath);
-  onStatus(`wrote ${release.length} release + ${generalization.length} generalization fixtures`);
+  onStatus(`wrote ${release.length} release + ${generalization.length} generalization fixtures and public digest companion`);
   return corpus;
 }
 

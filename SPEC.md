@@ -501,15 +501,16 @@ evidence rather than on authorship: the 2026-08-14 owner decision recorded under
 INV-9 accepts a `machine-adjudicated` corpus, so a fresh private human corpus,
 an independently bound adjudicator, and a human custodian are no longer
 preconditions. Two machine-adjudicated draws have been spent and the most recent
-returned `machine-release-fail`. One precondition did not survive that change
-and is recorded here rather than left implicit: `release-operator.ts` requires a
-source-current `development-pass` report bound to the same candidate and refuses
-any other terminal, while `machine-release.ts` never reads a development report
-at all — its only binding check proves the corpus and the frozen manifest agree
-and that the manifest still describes the source. A machine draw can therefore
-return `machine-release-pass` with no development evidence behind it. Provider
-weights and served variant remain unattested, and `MODEL_APPROVAL_QUALIFIED`
-remains `false`.
+returned `machine-release-fail`. Both `release-operator.ts` and
+`machine-release.ts` require a source-current `development-pass` report bound to
+the same candidate and refuse any other terminal. The machine path validates
+that report before ledger initialization/spend and before reading private corpus
+bytes; its separate binding check proves that the corpus and frozen manifest
+agree and that the manifest still describes the source. Authoring also emits a
+strict public `${outputPath}.digest.json` companion containing no fixture data;
+the machine release binds custody to that digest before opening the private
+corpus and verifies the exact bytes after spending. Provider weights and served
+variant remain unattested, and `MODEL_APPROVAL_QUALIFIED` remains `false`.
 
 ### REQ-012: Compatibility and packaging
 

@@ -125,24 +125,25 @@ model invention, keeping only commands the reviewer prompt's own allow paragraph
 instructs the model to allow. `scripts/qualification/author-machine-corpus.ts`
 authors the remaining strata against a named candidate manifest and writes the
 corpus bound to it. `scripts/qualification/machine-release.ts` draws it once,
-taking an optional `--candidate <manifest>` so both halves name the same
-candidate; it spends custody before opening private input, so an interrupted run
-cannot be re-drawn for a better result. `scripts/qualification/machine-authority.ts`
+taking optional `--candidate <manifest>` and `--development-report <report>`
+paths (both default to the canonical artifacts); it validates the source-current
+candidate and requires a bound `development-pass` before custody work. It spends
+custody before opening private input, so an interrupted run cannot be re-drawn
+for a better result. Authoring writes `${outputPath}.digest.json` automatically;
+the public companion records only the candidate binding and SHA-256 identity of
+the exact corpus bytes. Release validates that companion before custody, then
+checks the private bytes against it after spending. `scripts/qualification/machine-authority.ts`
 holds the authority labels and the signed provenance, including `commandSource`,
 which records per-stratum whether a command was authored or harvested.
 `scripts/qualification/measure-routing.ts` reports what share of real executions
 reach the reviewer at all. None of these enables model approval; a passing draw
 is a precondition for flipping the gate, not the flip itself.
 
-One precondition the human wrapper enforces is absent from the machine path, and
-it is named here rather than left for a reader to discover: `release-operator.ts`
-requires a source-current `development-pass` report bound to the same candidate
-and rejects any other terminal, while `machine-release.ts` never reads a
-development report. Its binding check proves that the corpus and the frozen
-manifest name the same candidate and that the manifest still describes the
-source, which is not the same claim. A machine draw can return
-`machine-release-pass` with no development evidence behind it, and today there
-is none that would validate.
+Both release paths require a source-current `development-pass` report bound to
+the same candidate and reject `stop-disabled` or stale reports. The machine path
+performs this validation before ledger initialization/spend and before reading
+the private corpus; its separate binding check proves that the corpus and frozen
+manifest name the same candidate.
 
 The coordinator-backed parity harness is an offline contract check:
 `bun test tests/eval/reviewer-contract-parity.test.ts`. It compares the
