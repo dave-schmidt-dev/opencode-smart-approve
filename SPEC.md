@@ -25,10 +25,11 @@ commands proceeding without user action, every candidate command being reviewed 
 a qualified selected-profile reviewer, and no error path turning into an automatic
 approval. The current build does not meet that outcome: private release
 qualification is incomplete.
-The development branch has since been re-run against a frozen candidate and
-completed its aggregate pass, though that candidate is no longer source-current
-(see the recovery checkpoint below); private release qualification
-remains incomplete.
+The development branch was re-run against a frozen candidate and completed its
+aggregate pass, but that candidate is superseded and its receipt no longer
+exists on disk (see the recovery checkpoint below). No source-current
+development pass is bound to the current freeze, and private release
+qualification remains incomplete.
 
 ## 3. Scope
 
@@ -475,13 +476,20 @@ partially spent regardless of which resolution is chosen: a fresh held-out
 corpus is required before any future qualification run can be treated as
 genuinely blind on the fixtures discussed above.
 
-Current recovery checkpoint: the current valid candidate manifest is
-`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773`. No
-development draw has been run against it. The most recent development draw is
-bound to `d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`,
-which `--validate-candidate` now reports stale because routing and policy
-changed after that freeze, so what follows records what was measured rather than
-source-current evidence. That
+Current recovery checkpoint (2026-08-25): every hash named in this paragraph is
+superseded, and each is retained only to identify which artifact a past
+measurement was taken against. For the current freeze, run `--validate-candidate`
+against `eval-results/frozen-candidate-manifest.json`; it validates as
+source-current today, and no development draw has been run against it.
+`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773` named an
+earlier freeze that this document previously described as current; it is not.
+The DeepSeek development draw recorded below was bound to
+`d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`, which
+`--validate-candidate` reports stale because routing and policy changed after
+that freeze. That receipt has since been overwritten at
+`eval-results/development-candidate-report.json` by a failed MiMo V2.5
+comparison and cannot be recovered, so what follows records what was measured
+and reported at the time rather than evidence that can be re-verified. That
 aggregate development report is `development-pass`: 95 fixtures, five
 repeats, 475 invocations, 225 valid provider calls, 475 classifier-denominator
 observations, zero invalid runs, and 2.799-second p95 latency. It has zero
@@ -490,15 +498,16 @@ disagreements, 0/200 benign false-manual observations, and 15/15 error-path
 manual observations. The report contains aggregate fields only, including a
 terminal-kind histogram. `validateDevelopmentCandidateReport` checks a report
 against both its candidate and the current source/config hashes, which this one
-passed when it was written. Re-validating it today fails with `candidate
-manifest hashes are stale`, stopping at the candidate before the report's own
-hashes are compared. That is the staleness above, not a defect in the report.
+passed when it was written. It can no longer be re-validated at all, because the
+fixed path that held it now holds the MiMo comparison. Validating what is there
+today against the current freeze fails with `development report candidate
+binding is stale`. That is staleness plus overwrite, not a defect in either
+report.
 
 The exact-runtime candidate canary, public-synthetic custody/parity suites,
 offline/package/spec gates, and OpenCode 1.18.10 integration and contract
 canaries pass. The failure-only no-corpus terminal branch remains available for
-failed development draws; its older receipts are superseded by the passing
-receipt above. The release branch remains `release-disabled`, now on
+failed development draws, and the report currently on disk is one such failure. The release branch remains `release-disabled`, now on
 evidence rather than on authorship: the 2026-08-14 owner decision recorded under
 INV-9 accepts a `machine-adjudicated` corpus, so a fresh private human corpus,
 an independently bound adjudicator, and a human custodian are no longer

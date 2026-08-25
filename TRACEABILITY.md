@@ -36,17 +36,19 @@ The fixed-candidate selector is `tests/eval/classifier-gate.test.ts` :: `freezes
 ## Current qualification recovery evidence
 
 The development terminal report is validated by `scripts/classifier-gate.ts`
-(`--validate-development-report`) and bound to
-`eval-results/frozen-candidate-manifest.json`, which is no longer source-current:
-re-validating the report today fails with `candidate manifest hashes are stale`.
-The current valid freeze is
-`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773` and no
-development draw has been run against it. Its aggregate-only contract and
-invalid-run/no-retry behavior are covered by
-`tests/eval/classifier-gate.test.ts`. The failure-only no-corpus terminal branch
-is covered by `tests/eval/qualification-terminal.test.ts` and implemented in
-`scripts/qualification/verify-terminal.ts`; it remains available for failed
-development draws, while the last draw taken is `development-pass`.
+(`--validate-development-report`). As of 2026-08-25
+`eval-results/frozen-candidate-manifest.json` itself validates as source-current;
+what is stale is the report's binding to it, so `--validate-development-report`
+against that freeze fails with `development report candidate binding is stale`.
+No development draw has been run against the current freeze, and the report on
+disk is a failed MiMo V2.5 A/B comparison (`stop-disabled` / `invalid_run`).
+This document quotes no candidate hash, because `eval-results/` is uncommitted
+and a hash here cannot be checked; run `--validate-candidate` for the current
+value. The report's aggregate-only contract and invalid-run/no-retry behavior
+are covered by `tests/eval/classifier-gate.test.ts`. The failure-only no-corpus
+terminal branch is covered by `tests/eval/qualification-terminal.test.ts` and
+implemented in `scripts/qualification/verify-terminal.ts`; the last draw taken
+is one of those failures.
 Fresh draft generation, cryptographic human-envelope and
 out-of-band adjudicator-key validation, and attended custody ordering
 are covered by `tests/eval/release-corpus.test.ts` and

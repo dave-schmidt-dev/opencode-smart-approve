@@ -31,14 +31,24 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 The MVP implementation is present. The plugin remains fail-closed, with
 model-backed automatic approval disabled by an immutable release gate.
 
-The last development draw completed all 475 invocations as `development-pass`:
-225 valid provider calls, 475 classifier observations, zero invalid runs, and a
-2.799-second p95 latency. That receipt is bound to candidate
-`d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`, which is no
-longer source-current — routing and policy changed after it was frozen, and
-`--validate-candidate` now reports it stale. The current valid freeze is
-`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773`; the
-development draw has not been re-run against it.
+No source-current `development-pass` receipt exists. This document quotes no
+candidate hash. `eval-results/` is not committed, so a hash written into
+committed prose cannot be checked by a reader or by a gate; read current state
+from the tools instead. `bun run scripts/classifier-gate.ts --validate-candidate
+eval-results/frozen-candidate-manifest.json` prints the current freeze and exits
+non-zero once it no longer matches source, and `--validate-development-report
+<report> --candidate <manifest>` reports whether a receipt is still bound to it.
+
+As of 2026-08-25 the freeze on disk validates as source-current, and no
+development draw has been run against it. The development report beside it is a
+failed MiMo V2.5 A/B comparison (`stop-disabled` / `invalid_run`, 164 of 475
+runs invalid) bound to an earlier candidate. Earlier development receipts are
+not recoverable: `qualify:development` and `qualify:live` both write the single
+fixed path `eval-results/development-candidate-report.json`, and
+`--freeze-candidate` likewise overwrites one fixed manifest path, so each new
+draw or freeze destroys its predecessor. `eval-results/` is gitignored, so there
+is no second copy. Re-running the development draw against the current freeze is
+the next qualification step.
 
 Release is blocked on classifier evidence, not on authorship. An owner decision
 of 2026-08-14 (INV-9) accepts a `machine-adjudicated` corpus for release so long
@@ -160,9 +170,10 @@ qualify or enable model-backed approval.
 The current release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`. `eval-results/` is not committed,
 so a fresh clone carries the commands that produce these artifacts but none of
-the artifacts themselves. The development result is an aggregate
-`development-pass` receipt; release remains disabled because no release draw has
-returned `machine-release-pass`.
+the artifacts themselves. The development report currently on disk is a failed
+A/B comparison, not a `development-pass` receipt; release remains disabled
+because no release draw has returned `machine-release-pass` and no source-current
+development pass is bound to the current freeze.
 
 ## Verified OpenCode boundary
 
