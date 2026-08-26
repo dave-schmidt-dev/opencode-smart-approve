@@ -161,6 +161,70 @@ describe("one-use qualification custody", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  // One ledger path serves every corpus, so a spent ledger refuses a new corpus
+  // as well as a re-draw of its own. Both refusals are correct and neither is
+  // being changed here; what is under test is that the operator can tell which
+  // one they hit, because only the collision is fixed by naming another path.
+  // TASK-031 accepted the shared path for the reasons in `spentRefusal`.
+  test("a spent ledger tells a path collision apart from a re-draw", () => {
+    const directory = root();
+    const ledgerPath = join(directory, "ledger.json");
+    const first = commitment(digestPrivateBytes("corpus-a"), 1);
+    initializeCustodyLedger(ledgerPath);
+    spendBeforePrivateInput(ledgerPath, first);
+
+    // Same corpus: the one-use guarantee, and the message stays the bare one.
+    expect(() => spendBeforePrivateInput(ledgerPath, first)).toThrow(/^custody ledger is spent$/);
+
+    // Different corpus: a path collision, named as one.
+    const second = commitment(digestPrivateBytes("corpus-b"), 2);
+    let message = "";
+    try { spendBeforePrivateInput(ledgerPath, second); } catch (error) { message = (error as Error).message; }
+    expect(message).toContain("different corpus");
+    expect(message).toContain(first.corpusDigest.slice(0, 12));
+    expect(message).toContain(second.corpusDigest.slice(0, 12));
+    expect(message).toContain("own ledger path");
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("a reserved ledger tells a foreign corpus apart from a re-signed commitment", () => {
+    const directory = root();
+    const ledgerPath = join(directory, "ledger.json");
+    const reserved = commitment(digestPrivateBytes("corpus-a"), 1);
+    initializeCustodyLedger(ledgerPath);
+    const reserve = (): void => {
+      writeFileSync(ledgerPath, JSON.stringify({
+        schemaVersion: CUSTODY_LEDGER_SCHEMA_VERSION,
+        state: "reserved",
+        consumptionNumber: 1,
+        corpusDigest: reserved.corpusDigest,
+        commitmentHash: sha256(canonical(reserved)),
+        updatedAt: new Date().toISOString(),
+      }));
+    };
+
+    // Consumption number matches the reservation, so the monotonic check passes
+    // and the digest comparison is what actually refuses.
+    reserve();
+    const foreign = commitment(digestPrivateBytes("corpus-b"), 1);
+    let collision = "";
+    try { spendBeforePrivateInput(ledgerPath, foreign); } catch (error) { collision = (error as Error).message; }
+    expect(collision).toContain("ledger reserved corpus");
+    expect(collision).toContain(reserved.corpusDigest.slice(0, 12));
+    expect(collision).toContain(foreign.corpusDigest.slice(0, 12));
+    expect(collision).toContain("own ledger path");
+
+    // Same corpus, re-signed under a fresh key: not a collision, and must not
+    // be reported as one.
+    reserve();
+    const resigned = commitment(reserved.corpusDigest, 1);
+    let mismatch = "";
+    try { spendBeforePrivateInput(ledgerPath, resigned); } catch (error) { mismatch = (error as Error).message; }
+    expect(mismatch).toContain("same corpus, different commitment");
+    expect(mismatch).not.toContain("own ledger path");
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   test("failures after spending leave the ledger spent and never reopen input", async () => {
     const directory = root();
     const ledgerPath = join(directory, "ledger.json");

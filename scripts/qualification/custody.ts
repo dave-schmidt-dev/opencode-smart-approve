@@ -318,6 +318,55 @@ export function readCustodyLedger(path: string): CustodyLedgerRecord {
   return readLedger(resolve(path));
 }
 
+/** Digest prefix length used in operator-facing custody diagnostics. */
+const DIAGNOSTIC_DIGEST_LENGTH = 12;
+
+function describeDigest(digest: string | undefined): string {
+  return digest ? digest.slice(0, DIAGNOSTIC_DIGEST_LENGTH) : "unrecorded";
+}
+
+/**
+ * Explain a refusal against a spent ledger.
+ *
+ * One ledger path serves every corpus, so a single refusal covers two
+ * different situations. The corpus really has been drawn already, which is the
+ * one-use guarantee working. Or a *new* corpus has met a previous corpus's
+ * spent ledger, which is a path collision. Both must stop — one record cannot
+ * describe two corpora — but only the second is resolved by naming a different
+ * ledger path, and a bare "custody ledger is spent" pointed the operator at the
+ * wrong remedy. The hand-made `machine-custody-ledger-v2/-v2b/-v3.json` files
+ * under `eval-results/` are what solving that by trial looks like.
+ *
+ * The collision is accepted rather than designed away (TASK-031). Deriving the
+ * default path from the corpus digest would give each corpus its own ledger,
+ * but a new corpus would then find no ledger at all and start fresh silently,
+ * and the spent ledger recording the previous draw would stop being consulted
+ * on any path. A shared path that refuses every corpus except the one it
+ * recorded is the conservative arrangement; what it owed the operator was an
+ * accurate reason, not a different filename.
+ *
+ * The digest prefix is safe to print: `corpusDigest` is the public companion
+ * value, published beside every draw, not the private corpus itself.
+ */
+function spentRefusal(current: CustodyLedgerRecord, commitment: SignedConsumptionCommitment): string {
+  if (current.corpusDigest && current.corpusDigest !== commitment.corpusDigest) {
+    return `custody ledger is spent on a different corpus (ledger holds ${describeDigest(current.corpusDigest)}, requested ${describeDigest(commitment.corpusDigest)}); a different corpus needs its own ledger path`;
+  }
+  return "custody ledger is spent";
+}
+
+/**
+ * Explain a refusal against a reservation that does not match. Same split as
+ * above: a different corpus is a path collision, while the same corpus under a
+ * different commitment is a re-signed draw of an interrupted run.
+ */
+function reservedRefusal(current: CustodyLedgerRecord, commitment: SignedConsumptionCommitment): string {
+  if (current.corpusDigest !== commitment.corpusDigest) {
+    return `reserved custody commitment does not match: ledger reserved corpus ${describeDigest(current.corpusDigest)}, requested ${describeDigest(commitment.corpusDigest)}; a different corpus needs its own ledger path`;
+  }
+  return "reserved custody commitment does not match: same corpus, different commitment";
+}
+
 /** Spend the corpus before any private-input callback is allowed to run. */
 export function spendBeforePrivateInput(path: string, commitment: SignedConsumptionCommitment, durability?: CustodyDurability): CustodyLedgerRecord {
   if (!verifySignedConsumptionCommitment(commitment)) throw new Error("custody commitment signature is invalid");
@@ -325,10 +374,10 @@ export function spendBeforePrivateInput(path: string, commitment: SignedConsumpt
   const releaseLock = acquireLock(absolute, durability);
   try {
     const current = readLedger(absolute);
-    if (current.state === "spent") throw new Error("custody ledger is spent");
+    if (current.state === "spent") throw new Error(spentRefusal(current, commitment));
     const expectedNumber = current.state === "reserved" ? current.consumptionNumber : current.consumptionNumber + 1;
     if (commitment.consumptionNumber !== expectedNumber) throw new Error("custody consumption number is not monotonic");
-    if (current.state === "reserved" && (current.corpusDigest !== commitment.corpusDigest || current.commitmentHash !== digestCommitment(commitment))) throw new Error("reserved custody commitment does not match");
+    if (current.state === "reserved" && (current.corpusDigest !== commitment.corpusDigest || current.commitmentHash !== digestCommitment(commitment))) throw new Error(reservedRefusal(current, commitment));
     if (current.state === "available") {
       const reserved: CustodyLedgerRecord = { schemaVersion: CUSTODY_LEDGER_SCHEMA_VERSION, state: "reserved", consumptionNumber: expectedNumber, corpusDigest: commitment.corpusDigest, commitmentHash: digestCommitment(commitment), updatedAt: new Date().toISOString() };
       writeDurable(absolute, reserved, durability);

@@ -617,6 +617,11 @@ export async function main(rawArgv = process.argv.slice(2)): Promise<number> {
     return 1;
   }
   const corpusPath = argv[0] ?? resolve(PROJECT_ROOT, "eval-results/machine-release-corpus.json");
+  // One default ledger path is shared by every corpus, which is why the second
+  // positional argument exists: a new corpus must be given its own path. That
+  // collision is accepted rather than designed away — see `spentRefusal` in
+  // `custody.ts` for why a digest-derived default would be the worse trade —
+  // and the refusal now says so instead of reporting a plain re-draw.
   const ledgerPath = argv[1] ?? resolve(PROJECT_ROOT, "eval-results/machine-custody-ledger.json");
   const aggregatePath = argv[2] ?? resolve(PROJECT_ROOT, "eval-results/machine-release-aggregate.json");
   const generatedAt = argv[3];
