@@ -4,6 +4,7 @@ import { parseBash, type BashParseResult } from "../parser/bash-parser";
 import { scanForSecrets, type SecretScanOptions, type SecretScanResult } from "../privacy/secret-scan";
 import { evaluateBuiltinRules, type BuiltinRuleReason } from "./builtin-rules";
 import { findReplanExecutableIdentity } from "./executable-identity";
+import { FD_DUPLICATION, SEGMENT_SEPARATOR, shellTokens } from "./shell-syntax";
 import type { SmartApproveConfig } from "../config/schema";
 
 export type DeterministicDecision = "manual" | "model_review" | "replan";
@@ -150,6 +151,19 @@ const VALUE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * with the flags that supply it instead. `sed -n '1,5p' file` names one path;
  * `sed -f script.sed file` names two, because the script came from a flag.
  */
+/**
+ * Utilities whose script operand is written in a language with no file-write
+ * primitive, so that operand can never name an output path and the shape test
+ * yields only false positives on it. `jq` qualifies: a filter is path-shaped by
+ * accident (`.`, `.[]`, `./2`), and `jq '.' package.json` — the most common jq
+ * invocation there is — was held manual because `isPathToken(".")` fires before
+ * the SCRIPT_OPERAND exemption can apply. `sed` deliberately does not qualify;
+ * its scripts write with `w`, which `dangerous_command` covers, and its operands
+ * keep the shape test as a second line. Only the script operand is exempt — the
+ * file operands that follow it are checked exactly as before.
+ */
+const FILESYSTEM_INERT_SCRIPT = new Set(["jq"]);
+
 const SCRIPT_OPERAND: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["grep", new Set(["-e", "-f", "--regexp", "--file"])],
   ["jq", new Set(["-f", "--from-file"])],
@@ -165,7 +179,7 @@ async function classifyPathIdentity(
   options: PathIdentityOptions = {},
 ): Promise<{ readonly stable: boolean; readonly pathClasses: readonly PolicyPathClass[] }> {
   const tokens = shellTokens(command);
-  const executables = command.split(/(?:\|\||&&|[|;&])/).map(firstToken).filter((token): token is string => token !== undefined);
+  const executables = command.split(SEGMENT_SEPARATOR).map(firstToken).filter((token): token is string => token !== undefined);
   const pathTokens = new Set<string>();
   let segment = 0;
   let seenCommand = false;
@@ -183,6 +197,9 @@ async function classifyPathIdentity(
       valuePending = false;
       continue;
     }
+    // A descriptor duplication redirects onto an already-open fd and names no
+    // file, so it is neither a redirect target nor an operand.
+    if (FD_DUPLICATION.test(token)) continue;
     if (/^(?:\d*[<>]{1,2}|&>)$/.test(token)) {
       redirectPending = true;
       continue;
@@ -218,11 +235,13 @@ async function classifyPathIdentity(
     // They still face the shape test, which keeps `sed -n 'w /tmp/out' file`
     // and `find . -newer ../ref` from escaping it.
     const roleIsPath = !consumed && !isScript && executable !== undefined && PATH_COMMANDS.has(executable);
-    if (isPathToken(value) || roleIsPath) pathTokens.add(value);
+    const shapeExempt = isScript && FILESYSTEM_INERT_SCRIPT.has(executable ?? "");
+    if ((isPathToken(value) && !shapeExempt) || roleIsPath) pathTokens.add(value);
   }
   // Bare redirect targets are path identity inputs even when the command has
   // no file-oriented executable (for example `echo value > output`).
   for (const token of tokens) {
+    if (FD_DUPLICATION.test(token)) continue;
     const target = token.match(/^(?:\d*[<>]{1,2}|&>)(.+)$/)?.[1];
     if (target) pathTokens.add(unquote(target));
   }
@@ -246,10 +265,6 @@ async function classifyPathIdentity(
     }
   }
   return { stable: true, pathClasses: pathTokens.size > 0 ? ["project"] : ["none"] };
-}
-
-function shellTokens(command: string): string[] {
-  return command.match(/(?:[^\s"';&|]+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\|\||&&|[;&|])/g) ?? [];
 }
 
 function firstToken(segment: string): string | undefined {

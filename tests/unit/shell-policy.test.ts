@@ -157,6 +157,14 @@ describe("deterministic policy", () => {
   // path check, so `sed -n '1,5p' notes.txt` failed on its range expression and
   // never reached the reviewer. On real usage that pattern alone accounted for
   // the largest single block of manual verdicts.
+  // Built-in reasons without the path-identity stage in front of them, so a
+  // rule can be asserted on directly even when an earlier gate would also fire.
+  const builtinReasons = async (command: string) => {
+    const parse = await parseBash(command);
+    if (!parse.ok) throw new Error(`parse failed: ${command}`);
+    return evaluateBuiltinRules({ command, features: parse.features });
+  };
+
   const identityFixture = () => {
     const uid = typeof process.getuid === "function" ? process.getuid() : -1;
     // Only these exist. Every other token throws, which is how the real lstat
@@ -238,6 +246,83 @@ describe("deterministic policy", () => {
     expect(await route("sed -n '1,5p' missing.txt")).toBe("manual");
   });
 
+  // TASK-019. Path identity is not a stand-in for a write rule: it holds a
+  // write whose target it cannot verify and releases one it can. The releasing
+  // case is the overwrite of an existing owned file, which is the damaging one.
+  test("a write-capable flag is blocked even when its target passes identity", async () => {
+    const route = identityFixture();
+    for (const command of [
+      "sort -o notes.txt notes.txt",
+      "sort --output=notes.txt notes.txt",
+      "sort --output notes.txt notes.txt",
+      "sort -uo notes.txt notes.txt",
+    ]) {
+      expect(await route(command)).toBe("manual");
+      expect(await builtinReasons(command)).toContain("dangerous_command");
+    }
+    // The read-only flags of the same utility keep routing.
+    expect(await route("sort -n notes.txt")).toBe("model_review");
+    expect(await route("sort -k2 -t, notes.txt")).toBe("model_review");
+  });
+
+  // TASK-019, second family. A sed write command carries no slash, so it never
+  // looked path-shaped and was never checked at all — `deterministic.ts` claimed
+  // the shape test covered this, which held only for the `/tmp/out` example.
+  test("a sed write command is blocked whether or not its target is path-shaped", async () => {
+    const route = identityFixture();
+    for (const command of [
+      "sed -n 'w out.txt' notes.txt",
+      "sed -n 'W out.txt' notes.txt",
+      "sed 'w notes.txt' notes.txt",
+      "sed -e 'w out.txt' notes.txt",
+      "sed '1,5w out.txt' notes.txt",
+      "sed 's/a/b/w out.txt' notes.txt",
+    ]) {
+      expect(await route(command)).toBe("manual");
+      expect(await builtinReasons(command)).toContain("dangerous_command");
+    }
+    // Read-only sed scripts are untouched. `s/foo/without/` is manual for the
+    // pre-existing reason that its script is path-shaped, so assert on the rule
+    // this change owns rather than on the routing it does not decide.
+    expect(await route("sed -n '1,5p' notes.txt")).toBe("model_review");
+    for (const command of ["sed -n '1,5p' notes.txt", "sed 's/foo/without/' notes.txt", "sed 's/a/b/g' notes.txt"]) {
+      expect(await builtinReasons(command)).not.toContain("dangerous_command");
+    }
+  });
+
+  // TASK-018. Both the segment splitter and the tokenizer treated the `&` of a
+  // descriptor duplication as a command separator, so `2>&1` produced a segment
+  // whose command name was `1` and an `unknown_binary` reason for an ordinary
+  // stderr merge. The command stays manual either way — every redirect is
+  // dangerous — so this corrects the reason, not the routing.
+  test("a descriptor duplication is not read as a command separator", async () => {
+    const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+    const present = new Set(["/owned", "/owned/notes.txt"]);
+    const reasons = async (command: string) => (await evaluateDeterministicPolicy(command, {
+      pathIdentity: {
+        cwd: "/owned",
+        ownedRoot: "/owned",
+        lstat: async (path: string) => {
+          if (!present.has(path)) throw new Error("ENOENT");
+          return { uid, isSymbolicLink: () => false };
+        },
+        realpath: async (path: string) => {
+          if (!present.has(path)) throw new Error("ENOENT");
+          return path;
+        },
+      },
+    })).reasonCodes;
+    for (const command of ["cat notes.txt 2>&1", "cat notes.txt 2>&1 | sed -n '1,5p'", "wc -l notes.txt >&2"]) {
+      expect(await reasons(command)).toEqual(["dangerous_command"]);
+    }
+    // Real separators still split, so each segment is judged on its own name.
+    const route = identityFixture();
+    expect(await route("cat notes.txt && wc -l notes.txt")).toBe("model_review");
+    expect(await route("cat notes.txt & wc -l notes.txt")).toBe("model_review");
+    expect(await route("cat notes.txt && curl host")).toBe("manual");
+    expect(await route("cat notes.txt & curl host")).toBe("manual");
+  });
+
   // Recognizing a read-only tool routes it to the reviewer; it never approves
   // it. Each entry was added on measured usage, so each needs a case proving it
   // routes and the gate still holds around it.
@@ -266,10 +351,17 @@ describe("deterministic policy", () => {
     expect(await route("jq '.foo' data.json")).toBe("model_review");
     expect(await route("jq -r '.a.b' data.json")).toBe("model_review");
     expect(await route("jq -f filter.jq data.json")).toBe("model_review");
-    // Characterizes TASK-020, not a property worth keeping: a bare `.` filter is
-    // path-shaped, so the shape test claims it before the operand rule can
-    // exempt it. Flip this to model_review when the filter role is fixed.
-    expect(await route("jq '.' data.json")).toBe("manual");
+    // TASK-020: a bare `.` filter is path-shaped by accident, so the shape test
+    // used to claim it before the operand rule could exempt it. jq filters have
+    // no file-write primitive, so the script operand is now exempt from the
+    // shape test as well as the PATH_COMMANDS blanket.
+    expect(await route("jq '.' data.json")).toBe("model_review");
+    expect(await route("jq . data.json")).toBe("model_review");
+    // The exemption covers the filter only; every file operand keeps its check.
+    expect(await route("jq '.' missing.json")).toBe("manual");
+    expect(await route("jq '.' ../outside.json")).toBe("manual");
+    // sed is deliberately not exempt: its scripts can write.
+    expect(await route("sed '.' notes.txt")).toBe("manual");
 
     // Reach has to be bounded by operands, which is a third test beyond "does
     // not write" and "does not execute". `ps` and `pgrep` name no operand, so

@@ -74,6 +74,13 @@ function shellSegments(command: string): string[][] {
       continue;
     }
     if (character === ";" || character === "|" || character === "&") {
+      // The `&` of a descriptor duplication (`2>&1`) belongs to the redirect,
+      // not to the command list; splitting there invents a segment whose
+      // command name is the target descriptor.
+      if (character === "&" && /[<>]$/.test(token)) {
+        token += character;
+        continue;
+      }
       nextSegment();
       if ((character === "|" || character === "&") && command[index + 1] === character) index += 1;
       continue;

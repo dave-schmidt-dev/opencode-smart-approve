@@ -1,4 +1,5 @@
 import type { BashFeatures } from "../parser/features";
+import { SEGMENT_SEPARATOR } from "./shell-syntax";
 
 /** Reasons emitted by the deterministic safety boundary. */
 export type BuiltinRuleReason =
@@ -67,10 +68,39 @@ function dynamicSyntax(context: BuiltinRuleContext): boolean {
     /(?:^|\s)(?:--config(?:=|\s)|--exec-path(?:=|\s)|--git-dir(?:=|\s)|--work-tree(?:=|\s))/.test(context.command);
 }
 
+/**
+ * Write-capable forms of utilities that are otherwise read-only. Path identity
+ * does not stand in for these. `sort -o existing existing` *passes* the
+ * identity check precisely because the target exists and is owned, which is the
+ * overwrite case; and a sed script such as `w out.txt` carries no slash, so it
+ * never looks path-shaped and is never checked at all.
+ *
+ * Both patterns deliberately over-match. A sed `w` preceded by an address, a
+ * delimiter, or a command separator and followed by a filename is treated as a
+ * write even when it is really replacement text (`s/foo/w bar/`). The sort
+ * pattern's `[^;&|]*` stops at a list separator but not at a newline, so in a
+ * multi-line command a later line's `-o` is attributed to an earlier `sort`.
+ * Over-blocking costs a manual prompt; under-blocking delegates a file write to
+ * a classifier.
+ *
+ * The sed rule has a known gap in the other direction: a script that uses `|`
+ * as its own delimiter (`sed 's|a|b|w f'`) is truncated by the segment split
+ * before this pattern sees the `w`. That is the splitter defect recorded in
+ * TASK-018, not a weakness of the pattern, and it is not closed here.
+ */
+const SORT_OUTPUT_FLAG = /(?:^|\s)sort\b[^;&|]*(?:\s-[A-Za-z]*o\s*\S|\s--output(?:=|\s)\s*\S)/;
+const SED_WRITE_COMMAND = /(?:^|['"{};/0-9$,~+])\s*[wW][ \t]+\S/;
+
+function writeCapableOperand(command: string, executables: readonly string[]): boolean {
+  if (executables.includes("sort") && SORT_OUTPUT_FLAG.test(command)) return true;
+  return executables.includes("sed") && SED_WRITE_COMMAND.test(command);
+}
+
 function dangerousCommand(context: BuiltinRuleContext): boolean {
   if (context.features.redirects) return true;
   const command = context.command;
   const executables = commandExecutables(command);
+  if (writeCapableOperand(command, executables)) return true;
   if (executables.some((executable) => executable === "rm" || executable === "tee" || executable === "mkdir" || executable === "less")) return true;
   if (/(?:^|\s)xargs\b[^;&|]*(?:^|\s)(?:rm|git\s+(?:reset|clean|checkout|restore))(?:\s|$)/.test(command)) return true;
   if (/(?:^|\s)find\b[^;&|]*(?:^|\s)-delete(?:\s|$)/.test(command)) return true;
@@ -105,7 +135,7 @@ export const evaluateBuiltinPolicy = evaluateBuiltinRules;
 /** Extract command names from each simple pipeline/list segment. */
 function commandExecutables(command: string): string[] {
   return command
-    .split(/(?:\|\||&&|[|;&])/)
+    .split(SEGMENT_SEPARATOR)
     .flatMap((segment) => segmentExecutables(segment));
 }
 
