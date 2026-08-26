@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 export interface TraceabilityReport {
   requirements: string[];
@@ -73,8 +73,178 @@ const parseTraceabilityTable = (root: string, traceabilityFile: string): { found
   return { found: true, mappings, errors };
 };
 
+/**
+ * Documents that are committed, and therefore the ones a reader outside this
+ * machine can see. `eval-results/` is gitignored, so a claim made here about an
+ * artifact is a claim nothing can check on a fresh clone -- which is exactly how
+ * three documents came to name three different "current" freezes, none of which
+ * matched the manifest on disk (TASK-026).
+ */
+const EVIDENCE_DOCS = ["README.md", "SPEC.md", "TRACEABILITY.md", "INVARIANTS.md"] as const;
+
+/**
+ * Words that mark a quoted hash as historical. A hash carrying one of these is
+ * identifying which artifact a past measurement was taken against, which is a
+ * legitimate and permanent use; a hash without one asserts currency, and
+ * currency is checkable.
+ *
+ * The marker must sit within `MARKER_WINDOW` characters of the hash, not merely
+ * somewhere in the same paragraph. A paragraph-wide test was tried first and is
+ * useless: these paragraphs are long enough that one almost always contains
+ * some hedging word about a different sentence's subject, so a hash asserted as
+ * current passed on the strength of an unrelated clause.
+ */
+const SUPERSEDED_MARKERS = ["superseded", "stale", "retired", "no longer"];
+const MARKER_WINDOW = 100;
+
+/**
+ * Currency claims are checked by literal phrase rather than by parsing English.
+ * The phrase list covers what these documents actually say; a new way of saying
+ * it is not caught until it is added here, and that limit is deliberate --
+ * approximate claim detection either misses the real case or fails on prose it
+ * misreads, and a gate that cries wolf gets deleted.
+ */
+const CURRENCY_CLAIMS: readonly { readonly phrase: string; readonly assertsCurrent: boolean }[] = [
+  { phrase: "validates as source-current", assertsCurrent: true },
+  { phrase: "is the source-current candidate", assertsCurrent: true },
+  { phrase: "the current valid freeze", assertsCurrent: true },
+  { phrase: "the freeze is stale", assertsCurrent: false },
+  { phrase: "reports the candidate stale", assertsCurrent: false },
+];
+
+/**
+ * Text deleted by a decision, which nothing stops from surviving in a document
+ * that was not edited at the time. Unlike a currency claim this is exact: the
+ * string already existed, so there is no future rephrasing to miss.
+ */
+const RETIRED_TEXT: readonly { readonly text: string; readonly reason: string }[] = [
+  { text: "pending fresh private corpus authorship, independent adjudication, and human custody", reason: "the 2026-08-14 owner decision (INV-9) removed the human-authorship precondition" },
+];
+
+const HEX64 = /\b[0-9a-f]{64}\b/g;
+
+/** Every candidate manifest on disk, including archived predecessors. */
+const manifestFiles = (root: string): string[] => {
+  const base = resolve(root, "eval-results");
+  if (!existsSync(base)) return [];
+  const collect = (directory: string): string[] => {
+    if (!existsSync(directory)) return [];
+    return readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /^frozen-candidate-manifest.*\.json$/.test(entry.name))
+      .map((entry) => join(directory, entry.name));
+  };
+  return [...collect(base), ...collect(join(base, "archive"))];
+};
+
+/**
+ * Whether the canonical frozen candidate still validates against source.
+ *
+ * `undefined` means the question could not be asked -- no manifest on disk, or
+ * no runtime binary to hash -- and every check that depends on it is skipped
+ * rather than failed. A fresh clone has no `eval-results/` at all, and a gate
+ * that fails there would be reporting on the checkout, not on the documents.
+ */
+export function canonicalCandidateIsCurrent(root: string, validate: (value: unknown) => unknown): boolean | undefined {
+  const path = resolve(root, "eval-results/frozen-candidate-manifest.json");
+  if (!existsSync(path)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+  try {
+    validate(parsed);
+    return true;
+  } catch (error) {
+    // Only a hash mismatch means stale. A missing runtime binary or an
+    // unreadable source file is this machine's problem, not the document's.
+    return error instanceof Error && /hashes are stale/.test(error.message) ? false : undefined;
+  }
+}
+
+/**
+ * Check the claims committed documents make about qualification artifacts.
+ *
+ * Two kinds, both of which have been asserted falsely in this repository and
+ * both times were caught by a human reading the file rather than by a gate: a
+ * quoted candidate hash that no longer validates, and a sentence asserting the
+ * current freeze is source-current when `--validate-candidate` disagrees.
+ */
+export function validateQuotedEvidence(root: string, validate: (value: unknown) => unknown): string[] {
+  const errors: string[] = [];
+  const manifests = manifestFiles(root);
+  const knownCurrentHashes = new Set<string>();
+  for (const file of manifests) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      continue;
+    }
+    try {
+      validate(parsed);
+    } catch {
+      continue;
+    }
+    const hash = (parsed as { manifestHash?: unknown }).manifestHash;
+    if (typeof hash === "string") knownCurrentHashes.add(hash);
+  }
+
+  const current = canonicalCandidateIsCurrent(root, validate);
+
+  for (const doc of EVIDENCE_DOCS) {
+    const path = resolve(root, doc);
+    if (!existsSync(path)) continue;
+    const text = readFileSync(path, "utf8");
+    // Claims are matched against whitespace-collapsed text: these documents are
+    // hard-wrapped, and SPEC's own currency claim straddles a line break, so a
+    // raw includes() would have missed the one instance that was false.
+    const flowed = text.replace(/\s+/g, " ");
+
+    for (const retired of RETIRED_TEXT) {
+      if (flowed.includes(retired.text.replace(/\s+/g, " "))) errors.push(`${doc} still contains retired text "${retired.text}": ${retired.reason}`);
+    }
+
+    if (current !== undefined) {
+      for (const claim of CURRENCY_CLAIMS) {
+        if (!flowed.includes(claim.phrase)) continue;
+        if (claim.assertsCurrent !== current) {
+          errors.push(`${doc} says "${claim.phrase}" but eval-results/frozen-candidate-manifest.json is ${current ? "source-current" : "stale"}`);
+        }
+      }
+    }
+
+    // Skip the hash check when no manifest is on disk: every quoted hash would
+    // report unverifiable, which is noise rather than a finding.
+    if (manifests.length === 0) continue;
+    HEX64.lastIndex = 0;
+    for (const match of flowed.matchAll(HEX64)) {
+      const hash = match[0];
+      if (knownCurrentHashes.has(hash)) continue;
+      const vicinity = flowed.slice(match.index, match.index + hash.length + MARKER_WINDOW).toLowerCase();
+      if (SUPERSEDED_MARKERS.some((marker) => vicinity.includes(marker))) continue;
+      errors.push(`${doc} quotes ${hash.slice(0, 12)}... as current, but no manifest under eval-results/ with that hash validates against source; mark it superseded or remove it`);
+    }
+  }
+  return errors;
+}
+
 /** Validate the requirement/task/test/invariant links before a release. */
-export function validateTraceability(root = process.cwd()): TraceabilityReport {
+/**
+ * Injected so the document gate can be tested without the qualification module,
+ * and so a checkout without a runtime binary degrades to a skip.
+ */
+export type CandidateValidator = (value: unknown) => unknown;
+
+function defaultCandidateValidator(value: unknown): unknown {
+  // Imported lazily: spec-guard is a document gate and must stay runnable in a
+  // checkout where the qualification module's dependencies are not loadable.
+  const { validateFrozenCandidateManifest } = require("./classifier-gate") as { validateFrozenCandidateManifest: CandidateValidator };
+  return validateFrozenCandidateManifest(value);
+}
+
+export function validateTraceability(root = process.cwd(), evidenceValidator: CandidateValidator = defaultCandidateValidator): TraceabilityReport {
   const errors: string[] = [];
   let spec = "";
   let traceabilityFile = "";
@@ -134,6 +304,8 @@ export function validateTraceability(root = process.cwd()): TraceabilityReport {
       errors.push(`${requirement} is not mapped to a TASK-###`);
     }
   }
+
+  errors.push(...validateQuotedEvidence(root, evidenceValidator));
 
   const gateTests = Array.from(
     invariantsFile.matchAll(/^\s*gate_test:\s*(\S+)/gm),

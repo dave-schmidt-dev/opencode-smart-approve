@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archiveDirectoryFor, archiveExistingArtifact, identifyArtifact } from "../../scripts/qualification/artifact-archive";
+import { archiveArtifactGroup, archiveDirectoryFor, archiveExistingArtifact, identifyArtifact } from "../../scripts/qualification/artifact-archive";
+import { createMachineCorpusDigestCompanion, writeMachineCorpusGeneration } from "../../scripts/qualification/author-machine-corpus";
 import {
   createDevelopmentCandidateReport,
   createFrozenCandidateManifest,
@@ -15,7 +16,7 @@ import {
   type QualificationRecord,
 } from "../../scripts/classifier-gate";
 import { REPEAT_COUNT } from "../../scripts/qualification/core";
-import { assertDevelopmentGate } from "../../scripts/qualification/machine-release";
+import { assertDevelopmentGate, writeMachineReleaseAggregate } from "../../scripts/qualification/machine-release";
 
 const AUTHORED_AT = "2026-08-26T14:40:00.000Z";
 const LATER_AT = "2026-08-27T09:15:00.000Z";
@@ -193,5 +194,77 @@ describe("artifact archive", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("a release aggregate is preserved before a later draw reuses its path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "artifact-archive-aggregate-"));
+    try {
+      const path = join(root, "machine-release-aggregate.json");
+      const hash = "c".repeat(64);
+      // The corpus a release draw consumes is one-use, so the aggregate is the
+      // only evidence that draw will ever produce. Overwriting it is
+      // unrecoverable in a way an ordinary report is not.
+      await writeMachineReleaseAggregate(path, { generatedAt: AUTHORED_AT, candidateManifestHash: hash, terminal: "machine-release-fail" });
+      expect(existsSync(archiveDirectoryFor(path))).toBe(false);
+      await writeMachineReleaseAggregate(path, { generatedAt: LATER_AT, candidateManifestHash: hash, terminal: "machine-release-pass" });
+
+      const archives = readdirSync(archiveDirectoryFor(path));
+      expect(archives).toEqual([`machine-release-aggregate-20260826T144000Z-${hash.slice(0, 12)}.json`]);
+      expect((JSON.parse(readFileSync(join(archiveDirectoryFor(path), archives[0] ?? ""), "utf8")) as { terminal: string }).terminal).toBe("machine-release-fail");
+      expect((JSON.parse(readFileSync(path, "utf8")) as { terminal: string }).terminal).toBe("machine-release-pass");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("identity reads the corpus binding, which is nested rather than top level", () => {
+    const hash = "d".repeat(64);
+    expect(identifyArtifact({ generatedAt: AUTHORED_AT, bindings: { candidateManifestHash: hash } })).toEqual({ stamp: "20260826T144000Z", hash: hash.slice(0, 12) });
+    // A top-level hash still wins, so nothing that already resolved changes.
+    expect(identifyArtifact({ generatedAt: AUTHORED_AT, candidateManifestHash: "e".repeat(64), bindings: { candidateManifestHash: hash } })?.hash).toBe("e".repeat(12));
+  });
+
+  test("a corpus generation is archived as one identity, not two", () => {
+    withTempRoot((root) => {
+      const corpusPath = join(root, "machine-release-corpus.json");
+      const digestPath = join(root, "machine-release-corpus.digest.json");
+      const hash = "f".repeat(64);
+      const generation = (generatedAt: string, marker: string) => {
+        const corpusBytes = `${JSON.stringify({ generatedAt, corpusVersion: marker, bindings: { candidateManifestHash: hash } }, null, 2)}\n`;
+        writeMachineCorpusGeneration({ corpusPath, digestPath, corpusBytes, digestCompanion: createMachineCorpusDigestCompanion({ candidateManifestHash: hash, corpusBytes }) });
+      };
+      generation(AUTHORED_AT, "gen-1");
+      generation(LATER_AT, "gen-2");
+
+      const archives = readdirSync(archiveDirectoryFor(corpusPath)).sort();
+      expect(archives).toHaveLength(2);
+      // The digest companion carries no timestamp of its own. Archived on its
+      // own it would be named from its bytes and nothing would tie it to the
+      // corpus it attests, which is the mispairing the group exists to prevent.
+      const stem = `-20260826T144000Z-${hash.slice(0, 12)}`;
+      expect(archives.every((name) => name.includes(stem))).toBe(true);
+      expect((JSON.parse(readFileSync(join(archiveDirectoryFor(corpusPath), archives.find((name) => !name.includes("digest")) ?? ""), "utf8")) as { corpusVersion: string }).corpusVersion).toBe("gen-1");
+    });
+  });
+
+  test("a group with no identifiable member is still kept together", () => {
+    withTempRoot((root) => {
+      const first = join(root, "a.json");
+      const second = join(root, "b.json");
+      writeFileSync(first, "{ truncated");
+      writeFileSync(second, JSON.stringify({ unrelated: true }));
+      const archived = archiveArtifactGroup([first, second]);
+      expect(archived).toHaveLength(2);
+      const stems = archived.map((path) => path.replace(/.*\/[ab]-/, ""));
+      expect(stems[0]).toBe(stems[1]);
+      expect(stems[0]).toMatch(/^undated-[0-9a-f]{12}\.json$/);
+    });
+  });
+
+  test("a group archives nothing when no member exists", () => {
+    withTempRoot((root) => {
+      expect(archiveArtifactGroup([join(root, "x.json"), join(root, "y.json")])).toEqual([]);
+      expect(existsSync(archiveDirectoryFor(join(root, "x.json")))).toBe(false);
+    });
   });
 });

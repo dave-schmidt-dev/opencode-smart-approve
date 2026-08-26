@@ -17,6 +17,7 @@
  * stay in memory.
  */
 import { createOpencodeClient } from "@opencode-ai/sdk";
+import { archiveExistingArtifact } from "./artifact-archive";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, rmSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -340,6 +341,24 @@ export async function runBlindedDraw(input: {
 }
 
 /** Join blinded results back to labels and score against the locked thresholds. */
+/**
+ * Write a release aggregate, preserving whatever the path already held.
+ *
+ * The aggregate is the terminal record of a draw against a one-use corpus: the
+ * corpus cannot be re-drawn, so a second draw reusing this path destroys the
+ * only evidence the first will ever have produced (TASK-031). Extracted from
+ * the draw so the archive step is reachable by a test without spending a draw.
+ */
+export async function writeMachineReleaseAggregate(
+  path: string,
+  aggregate: unknown,
+  onStatus: (message: string) => void = () => undefined,
+): Promise<void> {
+  const archived = archiveExistingArtifact(path);
+  if (archived) onStatus(`previous release aggregate archived to ${archived}`);
+  await Bun.write(resolve(path), `${JSON.stringify(aggregate, null, 2)}\n`);
+}
+
 export function scoreMachineRun(input: {
   readonly corpus: MachineReleaseCorpus;
   readonly results: readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }[];
@@ -547,7 +566,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   onStatus(`blinded ${blinded.length} fixtures; ${corpus.release.filter((fixture) => fixture.route === "reviewer").length} are reviewer-routed`);
   const results = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile });
   const aggregate = scoreMachineRun({ corpus, results, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt });
-  await Bun.write(resolve(options.aggregatePath), `${JSON.stringify(aggregate, null, 2)}\n`);
+  await writeMachineReleaseAggregate(options.aggregatePath, aggregate, onStatus);
   return aggregate;
 }
 

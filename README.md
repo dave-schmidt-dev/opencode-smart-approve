@@ -39,8 +39,10 @@ eval-results/frozen-candidate-manifest.json` prints the current freeze and exits
 non-zero once it no longer matches source, and `--validate-development-report
 <report> --candidate <manifest>` reports whether a receipt is still bound to it.
 
-As of 2026-08-25 the freeze on disk validates as source-current, and no
-development draw has been run against it. The development report beside it is a
+No development draw has been run against the freeze on disk. Whether that
+freeze still matches source is not recorded here: it goes stale the moment any
+file in its source manifest changes, so a verdict written into this document is
+true only until the next commit. Run `--validate-candidate` for the answer. The development report beside it is a
 failed MiMo V2.5 A/B comparison (`stop-disabled` / `invalid_run`, 164 of 475
 runs invalid) bound to an earlier candidate. Earlier development receipts are
 not recoverable: `qualify:development` and `qualify:live` both write the single

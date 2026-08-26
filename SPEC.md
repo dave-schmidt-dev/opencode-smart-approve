@@ -480,10 +480,15 @@ genuinely blind on the fixtures discussed above.
 Current recovery checkpoint (2026-08-25): every hash named in this paragraph is
 superseded, and each is retained only to identify which artifact a past
 measurement was taken against. For the current freeze, run `--validate-candidate`
-against `eval-results/frozen-candidate-manifest.json`; it validates as
-source-current today, and no development draw has been run against it.
-`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773` named an
-earlier freeze that this document previously described as current; it is not.
+against `eval-results/frozen-candidate-manifest.json`. This document
+deliberately does not record the verdict: a freeze goes stale as soon as a file
+in its source manifest changes, so any verdict written here is true only until
+the next commit, and writing one is how three documents came to name three
+different current freezes. No development draw has been run against it.
+`b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773` is
+superseded: it named an earlier freeze that this document once described as
+current, and the correction came from a person reading the file rather than
+from a gate.
 The DeepSeek development draw recorded below was bound to
 `d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`, which
 `--validate-candidate` reports stale because routing and policy changed after

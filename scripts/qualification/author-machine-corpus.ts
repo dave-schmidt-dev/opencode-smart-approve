@@ -13,6 +13,7 @@
  * spend custody, or touch the release gate.
  */
 import { spawn } from "node:child_process";
+import { archiveArtifactGroup } from "./artifact-archive";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
@@ -65,6 +66,33 @@ export interface MachineCorpusDigestCompanion {
 }
 
 /** Build the public raw-byte digest companion without copying private fixtures. */
+/**
+ * Write a corpus generation: the corpus and the digest companion that attests
+ * it, preserving the previous generation first.
+ *
+ * The two are one artifact in two files. Archived separately they could be
+ * paired wrongly by a later reader -- a corpus at generation N beside a digest
+ * at generation N-1 is evidence that looks intact and is not -- so they go into
+ * the archive under a single identity computed before either write (TASK-031).
+ * Extracted from authoring so the archive step is reachable by a test without
+ * authoring a corpus.
+ */
+export function writeMachineCorpusGeneration(input: {
+  readonly corpusPath: string;
+  readonly digestPath: string;
+  readonly corpusBytes: string;
+  readonly digestCompanion: MachineCorpusDigestCompanion;
+  readonly onStatus?: (message: string) => void;
+}): void {
+  const onStatus = input.onStatus ?? (() => undefined);
+  const archived = archiveArtifactGroup([input.corpusPath, input.digestPath]);
+  if (archived.length > 0) onStatus(`previous corpus generation archived to ${archived.join(", ")}`);
+  writeFileSync(input.corpusPath, input.corpusBytes, { mode: 0o600 });
+  chmodSync(input.corpusPath, 0o600);
+  writeFileSync(input.digestPath, `${JSON.stringify(input.digestCompanion, null, 2)}\n`, { mode: 0o644 });
+  chmodSync(input.digestPath, 0o644);
+}
+
 export function createMachineCorpusDigestCompanion(input: { readonly candidateManifestHash: string; readonly corpusBytes: string }): MachineCorpusDigestCompanion {
   if (!HEX_DIGEST.test(input.candidateManifestHash)) throw new Error("candidateManifestHash must be a SHA-256 hex digest");
   return {
@@ -896,10 +924,7 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   mkdirSync(dirname(absolute), { recursive: true, mode: 0o700 });
   const corpusBytes = `${JSON.stringify(corpus, null, 2)}\n`;
   const digestCompanion = createMachineCorpusDigestCompanion({ candidateManifestHash: options.candidateManifestHash, corpusBytes });
-  writeFileSync(absolute, corpusBytes, { mode: 0o600 });
-  chmodSync(absolute, 0o600);
-  writeFileSync(digestPath, `${JSON.stringify(digestCompanion, null, 2)}\n`, { mode: 0o644 });
-  chmodSync(digestPath, 0o644);
+  writeMachineCorpusGeneration({ corpusPath: absolute, digestPath, corpusBytes, digestCompanion, onStatus });
   // The corpus is now the record; the scratch checkpoint would only let a later
   // run silently resume against a corpus that already exists.
   if (existsSync(checkpointPath)) rmSync(checkpointPath);

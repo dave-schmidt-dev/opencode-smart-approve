@@ -61,7 +61,11 @@ function compactStamp(value: string): string {
 export function identifyArtifact(parsed: unknown): ArtifactIdentity | undefined {
   if (!isRecord(parsed)) return undefined;
   const generatedAt = parsed.generatedAt;
-  const hash = parsed.candidateManifestHash ?? parsed.manifestHash;
+  // The machine release corpus nests its binding under `bindings`, so a
+  // top-level lookup alone would leave the corpus unidentifiable and force it
+  // into the content-hash fallback.
+  const nested = isRecord(parsed.bindings) ? parsed.bindings.candidateManifestHash : undefined;
+  const hash = parsed.candidateManifestHash ?? parsed.manifestHash ?? nested;
   if (typeof generatedAt !== "string" || typeof hash !== "string") return undefined;
   if (!/^[0-9a-f]{64}$/.test(hash)) return undefined;
   return { stamp: compactStamp(generatedAt), hash: hash.slice(0, HASH_PREFIX_LENGTH) };
@@ -81,7 +85,7 @@ export function archiveDirectoryFor(path: string): string {
  * one: a truncated or hand-edited receipt is exactly the artifact whose loss
  * would be hardest to explain later.
  */
-export function archiveExistingArtifact(path: string): string | undefined {
+export function archiveExistingArtifact(path: string, sharedIdentity?: ArtifactIdentity): string | undefined {
   const absolute = resolve(path);
   if (!existsSync(absolute)) return undefined;
 
@@ -90,11 +94,13 @@ export function archiveExistingArtifact(path: string): string | undefined {
   const stem = basename(absolute, extension);
   const contentHash = createHash("sha256").update(bytes).digest("hex");
 
-  let identity: ArtifactIdentity | undefined;
-  try {
-    identity = identifyArtifact(JSON.parse(bytes.toString("utf8")) as unknown);
-  } catch {
-    identity = undefined;
+  let identity: ArtifactIdentity | undefined = sharedIdentity;
+  if (!identity) {
+    try {
+      identity = identifyArtifact(JSON.parse(bytes.toString("utf8")) as unknown);
+    } catch {
+      identity = undefined;
+    }
   }
 
   const directory = archiveDirectoryFor(absolute);
@@ -116,4 +122,41 @@ export function archiveExistingArtifact(path: string): string | undefined {
 
   writeFileSync(target, bytes, { mode: 0o600 });
   return target;
+}
+
+/**
+ * Archive several artifacts that are written together under one identity, so a
+ * later reader can tell which archived files were one generation.
+ *
+ * The machine release corpus and its digest companion are the case this exists
+ * for: the digest carries no timestamp of its own, so archived independently it
+ * would be named from its own bytes and nothing would tie it to the corpus it
+ * attests. A corpus at generation N sitting beside a digest at generation N-1 is
+ * evidence that looks intact and is not, and that failure is just as reachable
+ * inside the archive as it was at the canonical paths.
+ *
+ * The identity is taken from the first member that can supply one and computed
+ * before any member is written, so every member lands under the same name stem.
+ * When no member is identifiable the group falls back to a digest of all
+ * members' bytes in the order given, which still keeps them together.
+ */
+export function archiveArtifactGroup(paths: readonly string[]): readonly string[] {
+  const present = paths.map((path) => resolve(path)).filter((path) => existsSync(path));
+  if (present.length === 0) return [];
+
+  let identity: ArtifactIdentity | undefined;
+  const groupHash = createHash("sha256");
+  for (const path of present) {
+    const bytes = readFileSync(path);
+    groupHash.update(bytes);
+    if (identity) continue;
+    try {
+      identity = identifyArtifact(JSON.parse(bytes.toString("utf8")) as unknown);
+    } catch {
+      // An unreadable member must not stop the rest of the group being kept.
+    }
+  }
+
+  const shared = identity ?? { stamp: "undated", hash: groupHash.digest("hex").slice(0, HASH_PREFIX_LENGTH) };
+  return present.flatMap((path) => archiveExistingArtifact(path, shared) ?? []);
 }

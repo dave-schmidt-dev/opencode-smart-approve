@@ -2,7 +2,7 @@ import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { validateTraceability } from "../../scripts/spec-guard";
+import { validateQuotedEvidence, validateTraceability } from "../../scripts/spec-guard";
 import { REPLAN_EXECUTABLES } from "../../src/policy/executable-identity";
 import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 
@@ -174,4 +174,116 @@ describe("spec traceability", () => {
       expect(file).not.toMatch(/(^|\/)(\.env|.*\.log$)/);
     }
   }, 120_000);
+});
+
+describe("quoted evidence in committed documents", () => {
+  const CURRENT_HASH = "a".repeat(64);
+  const OTHER_HASH = "b".repeat(64);
+  const stale = (): never => { throw new Error("candidate manifest hashes are stale"); };
+  const current = (value: unknown): unknown => value;
+
+  const evidenceRoot = (options: { readonly spec: string; readonly manifest?: boolean }): string => {
+    const root = mkdtempSync(join(tmpdir(), "smart-approve-evidence-"));
+    writeFileSync(join(root, "SPEC.md"), options.spec);
+    if (options.manifest !== false) {
+      mkdirSync(join(root, "eval-results"), { recursive: true });
+      writeFileSync(join(root, "eval-results/frozen-candidate-manifest.json"), JSON.stringify({ manifestHash: CURRENT_HASH }));
+    }
+    return root;
+  };
+
+  test("a currency claim that disagrees with the manifest fails", () => {
+    const root = evidenceRoot({ spec: "The freeze validates as source-current today.\n" });
+    try {
+      expect(validateQuotedEvidence(root, stale).join(" ")).toContain("validates as source-current");
+      expect(validateQuotedEvidence(root, current)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a currency claim split across a line break is still matched", () => {
+    // SPEC is hard-wrapped and its own false claim straddled a newline, so a
+    // raw substring test would have passed the one document that was wrong.
+    const root = evidenceRoot({ spec: "The freeze validates as\nsource-current today.\n" });
+    try {
+      expect(validateQuotedEvidence(root, stale)).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a claim in the other direction fails too", () => {
+    const root = evidenceRoot({ spec: "As of today the freeze is stale.\n" });
+    try {
+      expect(validateQuotedEvidence(root, current).join(" ")).toContain("the freeze is stale");
+      expect(validateQuotedEvidence(root, stale)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unmarked hash that matches no validating manifest fails, a marked one does not", () => {
+    const root = evidenceRoot({ spec: `Bound to ${OTHER_HASH} for the draw below.\n` });
+    try {
+      expect(validateQuotedEvidence(root, current).join(" ")).toContain(OTHER_HASH.slice(0, 12));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    const marked = evidenceRoot({ spec: `Bound to ${OTHER_HASH}, which is superseded.\n` });
+    try {
+      expect(validateQuotedEvidence(marked, current)).toEqual([]);
+    } finally {
+      rmSync(marked, { recursive: true, force: true });
+    }
+  });
+
+  test("a marker elsewhere in the paragraph does not excuse the hash", () => {
+    // The first version of this gate tested the whole paragraph and passed a
+    // hash asserted as current because an unrelated clause said "earlier".
+    const root = evidenceRoot({ spec: `An earlier freeze is no longer relevant. The current one is ${OTHER_HASH} and it is what every draw below used, which is the binding this document asserts.\n` });
+    try {
+      expect(validateQuotedEvidence(root, current)).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a hash naming a manifest that validates is accepted", () => {
+    const root = evidenceRoot({ spec: `The current freeze is ${CURRENT_HASH}.\n` });
+    try {
+      expect(validateQuotedEvidence(root, current)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a checkout with no eval-results is skipped, not failed", () => {
+    // eval-results/ is gitignored, so a fresh clone can answer none of these
+    // questions. Failing there would report on the checkout, not the document.
+    const root = evidenceRoot({ spec: `Validates as source-current, bound to ${OTHER_HASH}.\n`, manifest: false });
+    try {
+      expect(validateQuotedEvidence(root, stale)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a validator failing for a reason other than staleness is skipped", () => {
+    const root = evidenceRoot({ spec: "The freeze validates as source-current today.\n" });
+    try {
+      expect(validateQuotedEvidence(root, () => { throw new Error("ENOENT: opencode binary missing"); })).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("retired text is caught wherever it survived", () => {
+    const root = evidenceRoot({ spec: "Release is pending fresh private corpus authorship, independent adjudication, and human custody.\n" });
+    try {
+      expect(validateQuotedEvidence(root, current).join(" ")).toContain("retired text");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

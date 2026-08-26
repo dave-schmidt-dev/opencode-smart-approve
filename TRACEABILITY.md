@@ -36,10 +36,11 @@ The fixed-candidate selector is `tests/eval/classifier-gate.test.ts` :: `freezes
 ## Current qualification recovery evidence
 
 The development terminal report is validated by `scripts/classifier-gate.ts`
-(`--validate-development-report`). As of 2026-08-25
-`eval-results/frozen-candidate-manifest.json` itself validates as source-current;
-what is stale is the report's binding to it, so `--validate-development-report`
-against that freeze fails with `development report candidate binding is stale`.
+(`--validate-development-report`). As of 2026-08-25 what was stale was
+the report's binding to `eval-results/frozen-candidate-manifest.json` rather
+than the manifest itself, so `--validate-development-report` against that freeze
+fails with `development report candidate binding is stale`. The manifest's own
+currency is not recorded here; `--validate-candidate` answers it.
 No development draw has been run against the current freeze, and the report on
 disk is a failed MiMo V2.5 A/B comparison (`stop-disabled` / `invalid_run`).
 This document quotes no candidate hash, because `eval-results/` is uncommitted
