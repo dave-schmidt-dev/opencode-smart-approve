@@ -314,7 +314,8 @@ there is no selection or comparison list. The validator rejects any candidate dr
 before the human development gate begins.
 
 The other-repeat-disagreement rate was re-derived from 0.5% to 2% (limit 1 -> 7
-per 95-fixture set) after four live probe rounds (463 calls) against DeepSeek V4
+per 95-fixture set; the limit is `floor(0.02 x fixtures x (repeats - 1))`, so the
+113-fixture v3 corpus raises it to 9) after four live probe rounds (463 calls) against DeepSeek V4
 Flash measured an ~1.7% background disagreement rate on benign fixtures squarely
 inside the reviewer's explicit allow list, with every flip a non-reproducible
 single instance on a different command each time -- consistent with temperature-0
@@ -503,6 +504,22 @@ fixed path that held it now holds the MiMo comparison. Validating what is there
 today against the current freeze fails with `development report candidate
 binding is stale`. That is staleness plus overwrite, not a defect in either
 report.
+
+Every measurement above was taken against development corpus
+`2026-08-08-development-v2`, which held 95 fixtures sitting exactly on the
+category floor. On 2026-08-26 the corpus was expanded to
+`2026-08-26-development-v3`: 113 fixtures, 565 invocations, 59 reviewer-routed
+fixtures and therefore 295 provider calls per draw. The additions exist because
+the v2 corpus exercised 24 of the 40 entries in `KNOWN_COMMANDS` and none of
+`jq`, `sort`, `sed`, `grep`, `cut`, `uniq`, `tr`, `nl`, `shasum`, `which`,
+`readlink`, `cd` or `command`; four real policy defects fixed on 2026-08-25 were
+invisible to it. Labels were authored from intent rather than from observed
+routing, so the corpus can disagree with the gate: `command -v git` is labeled
+`allow` and is currently held manual, which is a genuine false manual and is
+counted as one. Category minimums are unchanged and remain a floor, and the
+derived limits scale with the corpus — benign false-manual moves from 10 to 13
+and other-repeat-disagreement from 7 to 9. No draw has been taken against v3;
+every number in the preceding paragraphs belongs to v2 and is not comparable.
 
 The exact-runtime candidate canary, public-synthetic custody/parity suites,
 offline/package/spec gates, and OpenCode 1.18.10 integration and contract

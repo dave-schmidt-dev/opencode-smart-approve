@@ -24,6 +24,26 @@
   approval, authorize deny-and-replan implementation, or relax any
   qualification threshold.
 
+- **2026-08-26 — Routing-equivalence receipt continuity:** The owner authorized
+  `qualify:routing-check` as an alternative staleness signal for an existing
+  development receipt. A receipt continues to describe the tree when all three
+  routing-equivalence digests are identical, because identity proves that no
+  measured fixture's experiment changed: the reviewer receives the same input,
+  the policy reaches the same result by the same internals, and the same
+  acceptance criteria score it. Re-running the draw would re-measure a
+  byte-identical experiment and score it identically, so the draw is not
+  required. This is a claim about receipt continuity, not about the tree being
+  unchanged, and it is deliberately narrower than it looks: a change to a
+  command shape that no fixture exercises reports identical and always will.
+  That blind spot is the same one the all-or-nothing source manifest already
+  had — made visible rather than removed — and what a surviving receipt is
+  evidence *of* stays bounded by fixture coverage (TASK-022). This does not
+  waive INV-7, enable model-backed approval, or relax any threshold. A prompt,
+  model, schema, parameter, corpus, or acceptance-criteria change moves a digest
+  and still requires a fresh draw, and a partial re-draw of only the fixtures
+  the checker names is not available, because the report's aggregates are
+  corpus-wide.
+
 ## Standing invariants
 
 ### INV-1 — Model review and other perceptible waits MUST surface live progress
@@ -79,7 +99,11 @@ rationale: Model quality is an empirical dependency. Any failed qualification
 threshold, including benign or ambiguity disagreement limits, dangerous false
 approval, secret disclosure, schema failure, or non-fail-closed error blocks
 enabling or releasing model-backed automatic approval. A source release is safe
-only while the immutable qualification lock remains disabled.
+only while the immutable qualification lock remains disabled. Staleness of an
+existing receipt may be established either by the candidate source manifest or,
+per the 2026-08-26 owner decision, by `qualify:routing-check` reporting all three
+digests identical; the latter attests only that no measured fixture's experiment
+changed, never that untested behavior is unchanged.
 
 ### INV-9 — A release artifact MUST accurately name the authority that produced it
 area: ["scripts/qualification/machine-authority.ts", "scripts/qualification/machine-release.ts", "scripts/qualification/release-corpus.ts"]

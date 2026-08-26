@@ -380,7 +380,9 @@ function usage(): string {
     "Digests: reviewerInput (what the model sees), policy (deterministic internals,",
     "over-sensitive), acceptance (corpus labels, minimums, and thresholds a verdict uses).",
     "",
-    "This tool changes no gate. A matching snapshot does not satisfy INV-7 on its own.",
+    "Per the 2026-08-26 owner decision, a three-way identical result lets an existing",
+    "development receipt stand without a fresh draw. It attests only that no measured",
+    "fixture's experiment changed -- never that untested behavior is unchanged.",
   ].join("\n");
 }
 
@@ -424,7 +426,8 @@ async function main(): Promise<number> {
     console.log(`  policy digest:         ${current.digests.policy}`);
     console.log(`  acceptance digest:     ${current.digests.acceptance}`);
     console.log("  A draw against this tree would re-measure the same experiment and score it the same way.");
-    console.log("  This does not satisfy INV-7 on its own; see TASK-029.");
+    console.log("  Per the 2026-08-26 owner decision, an existing development receipt stands.");
+    console.log("  Scope: no measured fixture changed. A shape no fixture covers reports identical.");
     return 0;
   }
   console.error(!reviewerInputMatches

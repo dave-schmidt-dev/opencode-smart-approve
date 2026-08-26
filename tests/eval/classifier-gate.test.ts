@@ -228,8 +228,16 @@ describe("classifier qualification v4", () => {
   test("loads only the development file and meets every category minimum", () => {
     resetCorpusReadCounters();
     const { corpus } = loadDevelopmentCorpus();
-    const counts = CATEGORIES.map((category) => corpus.fixtures.filter((fixture) => fixture.category === category).length);
-    expect(counts).toEqual([40, 15, 10, 10, 10, 10]);
+    // MINIMUMS is a floor, not an exact size: `validateCorpus` rejects a category
+    // only when it falls below. The corpus sat exactly on the floor until
+    // 2026-08-26, which made an equality assertion here indistinguishable from a
+    // minimum check. Assert the contract that actually exists, and pin the total
+    // separately so the corpus cannot grow without someone changing this number.
+    for (const category of CATEGORIES) {
+      const count = corpus.fixtures.filter((fixture) => fixture.category === category).length;
+      expect(count).toBeGreaterThanOrEqual(MINIMUMS[category]);
+    }
+    expect(corpus.fixtures).toHaveLength(113);
     expect(corpus.labelAccess).toBe("development-only");
     expect(corpus.labelsAvailableToPromptTuning).toBe(true);
     expect(getCorpusReadCounters()).toEqual({ developmentReads: 1, combinedBundleReads: 0, privateHeldoutByteReads: 0 });

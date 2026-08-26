@@ -49,7 +49,7 @@ describe("the snapshot records what the model actually receives", () => {
   test("the snapshot covers the whole corpus at the draw's repeat count", () => {
     // A draw makes one provider call per reviewer-routed fixture per repeat,
     // so these two numbers are what a re-run would cost.
-    expect(snapshot.entries).toHaveLength(95);
+    expect(snapshot.entries).toHaveLength(113);
     expect(snapshot.parameters.repeats).toBe(REPEAT_COUNT);
     expect(snapshot.parameters.temperature).toBe(TEMPERATURE);
     const routed = snapshot.entries.filter((entry) => entry.measured.route === "reviewer").length;
