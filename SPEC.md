@@ -518,7 +518,13 @@ routing, so the corpus can disagree with the gate: `command -v git` is labeled
 `allow` and is currently held manual, which is a genuine false manual and is
 counted as one. Category minimums are unchanged and remain a floor, and the
 derived limits scale with the corpus — benign false-manual moves from 10 to 13
-and other-repeat-disagreement from 7 to 9. No draw has been taken against v3;
+and other-repeat-disagreement from 7 to 9. That deliberate disagreement is not
+free, and the direction is worth stating: it is the only benign fixture the
+policy stops, so it spends 5 of the 13 allowed false manuals deterministically,
+before the reviewer is consulted at all. The model therefore has 8 remaining
+across the 270 benign invocations it actually sees, an effective tolerance near
+3% rather than the nominal 5%. A v3 draw is measured against a tighter benign
+budget than any v2 number was. No draw has been taken against v3;
 every number in the preceding paragraphs belongs to v2 and is not comparable.
 
 The exact-runtime candidate canary, public-synthetic custody/parity suites,
