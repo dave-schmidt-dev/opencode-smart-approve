@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createOpencodeClient } from "@opencode-ai/sdk";
+import { archiveExistingArtifact } from "./qualification/artifact-archive";
 import { evaluateDeterministicPolicy } from "../src/policy/deterministic";
 import { createReviewerAgent, type ReviewerSessionClient } from "../src/reviewer/agent";
 import { REVIEWER_CONTRACT_VERSION } from "../src/reviewer/contract";
@@ -236,6 +237,7 @@ const SOURCE_MANIFEST_FILES = [
   "src/plugin.ts",
   "scripts/classifier-gate.ts",
   "scripts/qualification/core.ts",
+  "scripts/qualification/artifact-archive.ts",
   "scripts/qualification/custody.ts",
   "scripts/qualification/release-corpus.ts",
   "scripts/qualification/generate-release-draft.ts",
@@ -470,9 +472,13 @@ export function validateDevelopmentCandidateReport(value: unknown, candidate: Fr
   return value as unknown as DevelopmentCandidateReport;
 }
 
-function writeDevelopmentCandidateReport(path: string, report: DevelopmentCandidateReport): void {
+export function writeDevelopmentCandidateReport(path: string, report: DevelopmentCandidateReport): void {
   assertAggregateOnly(report);
   mkdirSync(dirname(resolve(path)), { recursive: true });
+  // Preserve the predecessor before reusing the path (TASK-027). Notice goes to
+  // stderr so the stdout artifact contract is unchanged.
+  const archived = archiveExistingArtifact(path);
+  if (archived) console.error(`[classifier-qualification] previous development receipt archived to ${archived}`);
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
@@ -828,6 +834,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       if (freezeCandidateIndex >= 0) {
         const candidate = createFrozenCandidateManifest(new Date().toISOString(), profileID ?? ACTIVE_PRODUCTION_PROFILE_ID);
         mkdirSync(dirname(resolve(candidatePath)), { recursive: true });
+        // A re-freeze orphans every receipt bound to the outgoing manifest, so
+        // the manifest a past receipt names has to survive it (TASK-027).
+        const archivedCandidate = archiveExistingArtifact(candidatePath);
+        if (archivedCandidate) console.error(`[classifier-qualification] previous frozen candidate archived to ${archivedCandidate}`);
         writeFileSync(candidatePath, `${JSON.stringify(candidate, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
         console.log(JSON.stringify({ candidate: candidatePath, manifestHash: candidate.manifestHash, providerRevision: candidate.providerRevision, servedVariant: candidate.servedVariant }));
       } else {
