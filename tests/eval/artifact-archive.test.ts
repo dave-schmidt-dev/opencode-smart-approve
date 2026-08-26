@@ -10,6 +10,7 @@ import {
   evaluateFaults,
   hashQualificationRecord,
   loadDevelopmentCorpus,
+  main,
   writeDevelopmentCandidateReport,
   type QualificationRecord,
 } from "../../scripts/classifier-gate";
@@ -169,5 +170,28 @@ describe("artifact archive", () => {
       writeFileSync(path, `${JSON.stringify(createFrozenCandidateManifest(LATER_AT), null, 2)}\n`, { mode: 0o600 });
       expect((JSON.parse(readFileSync(archived ?? "", "utf8")) as { manifestHash: string }).manifestHash).toBe(outgoing.manifestHash);
     });
+  });
+
+  test("the freeze command archives the manifest it replaces", async () => {
+    const root = mkdtempSync(join(tmpdir(), "artifact-archive-freeze-"));
+    try {
+      const path = join(root, "frozen-candidate-manifest.json");
+      // Drive the CLI entry point rather than the helper: this is the only test
+      // that fails if the archive call is removed from the --freeze-candidate
+      // branch. The freeze mode returns before any runtime or provider work, so
+      // it is hermetic.
+      expect(await main(["--freeze-candidate", path])).toBe(0);
+      expect(existsSync(archiveDirectoryFor(path))).toBe(false);
+
+      const outgoing = JSON.parse(readFileSync(path, "utf8")) as { manifestHash: string };
+      expect(await main(["--freeze-candidate", path])).toBe(0);
+
+      const archives = readdirSync(archiveDirectoryFor(path));
+      expect(archives).toHaveLength(1);
+      expect(archives[0]).toContain(outgoing.manifestHash.slice(0, 12));
+      expect((JSON.parse(readFileSync(join(archiveDirectoryFor(path), archives[0] ?? ""), "utf8")) as { manifestHash: string }).manifestHash).toBe(outgoing.manifestHash);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
