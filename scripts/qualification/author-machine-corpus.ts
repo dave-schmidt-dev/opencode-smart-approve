@@ -156,7 +156,7 @@ export function machineCorpusDigestPath(outputPath: string): string {
  * dangerous surface above the policy, and it costs a failed authoring run
  * rather than a spent corpus to learn it.
  */
-const CATEGORY_ROUTING: Record<FixtureCategory, "deterministic" | "model_review" | "either"> = {
+export const CATEGORY_ROUTING: Record<FixtureCategory, "deterministic" | "model_review" | "either"> = {
   benign: "model_review",
   // Mixed on purpose, and it must stay mixed. Nearly every dangerous fixture
   // has to reach the reviewer or it scores the policy instead of the model,
@@ -178,7 +178,66 @@ const CATEGORY_ROUTING: Record<FixtureCategory, "deterministic" | "model_review"
  * One dangerous fixture per corpus exercises the observed error path; the rest
  * of the stratum has to reach the model to measure anything about it.
  */
-const DETERMINISTIC_FLOOR: Partial<Record<FixtureCategory, number>> = { dangerous: 1 };
+export const DETERMINISTIC_FLOOR: Partial<Record<FixtureCategory, number>> = { dangerous: 1 };
+
+/**
+ * What assembly requires of a category, stated where a gate can read it.
+ *
+ * These demands used to live only in the assembly code that throws when they
+ * are unmet, several hundred lines and one authoring run away from the routing
+ * table that has to satisfy them. That distance is the whole defect in
+ * TASK-023(2): `CATEGORY_ROUTING.dangerous` was `model_review`, which rejects
+ * every candidate a deterministic error-path fixture needs, and nothing
+ * compared the two until a run had converged and paid for every category's
+ * provider calls before throwing.
+ */
+const ASSEMBLY_DEMANDS: Partial<Record<FixtureCategory, { readonly deterministic?: number; readonly reviewer?: number }>> = {
+  // buildReleaseCorpus throws "no dangerous candidate is deterministically
+  // routed, so the corpus has no error path" when this is unmet.
+  dangerous: { deterministic: 1 },
+};
+
+/**
+ * Categories whose accept rule cannot produce what assembly will demand of them.
+ *
+ * Pure comparison of constants: both sides are fixed before a single command is
+ * authored, so an unsatisfiable configuration is knowable at startup rather
+ * than after a run. Returns one message per unsatisfiable category.
+ */
+export function unsatisfiableCategories(
+  routing: Readonly<Record<FixtureCategory, "deterministic" | "model_review" | "either">> = CATEGORY_ROUTING,
+  floors: Readonly<Partial<Record<FixtureCategory, number>>> = DETERMINISTIC_FLOOR,
+): string[] {
+  const problems: string[] = [];
+  for (const category of CATEGORIES) {
+    const demand = ASSEMBLY_DEMANDS[category];
+    if (!demand) continue;
+    const requirement = routing[category];
+    const needed = MINIMUMS[category] + 1;
+    const floor = floors[category] ?? 0;
+    if (demand.deterministic) {
+      if (requirement === "model_review") {
+        problems.push(`${category} routing is model_review but assembly requires ${demand.deterministic} deterministically routed fixture(s)`);
+      } else if (requirement === "either" && floor < demand.deterministic) {
+        problems.push(`${category} deterministic floor is ${floor} but assembly requires ${demand.deterministic}`);
+      }
+    }
+    if (demand.reviewer) {
+      if (requirement === "deterministic") {
+        problems.push(`${category} routing is deterministic but assembly requires ${demand.reviewer} reviewer-routed fixture(s)`);
+      } else if (requirement === "either" && needed - floor < demand.reviewer) {
+        problems.push(`${category} leaves ${needed - floor} reviewer slot(s) but assembly requires ${demand.reviewer}`);
+      }
+    }
+  }
+  return problems;
+}
+
+/** Fail before the first provider call rather than after the last one. */
+export function assertCategoryRoutingSatisfiable(): void {
+  const problems = unsatisfiableCategories();
+  if (problems.length > 0) throw new Error(`category routing cannot satisfy assembly: ${problems.join("; ")}`);
+}
 
 /**
  * Whether a candidate's observed route is one this category still has room for.
@@ -188,7 +247,7 @@ const DETERMINISTIC_FLOOR: Partial<Record<FixtureCategory, number>> = { dangerou
  * category is not: accepting a seventeenth model-routed dangerous command would
  * crowd out the one policy-resolved fixture the error path needs.
  */
-function routeWanted(input: {
+export function routeWanted(input: {
   readonly requirement: "deterministic" | "model_review" | "either";
   readonly reachesModel: boolean;
   readonly accepted: readonly AuthoredFixtureCandidate[];
@@ -476,7 +535,7 @@ interface AuthoringPromptInput {
   readonly routeGoal: RouteGoal;
 }
 
-function authoringPrompt({ category, count, rejectedShapes, rejectedRouting, alreadyHave, routeGoal }: AuthoringPromptInput): string {
+export function authoringPrompt({ category, count, rejectedShapes, rejectedRouting, alreadyHave, routeGoal }: AuthoringPromptInput): string {
   const wantPolicy = routeGoal === "policy";
   const banded = CATEGORY_ROUTING[category] !== "deterministic" && !wantPolicy;
   // Split by the route actually observed. The two rejections mean opposite
@@ -812,6 +871,10 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   }
   const development = developmentShapeSets();
   const avoidShapes = new Set(development.shapes);
+  // Cheap, and it costs a run to learn otherwise: the v3 failure threw at 15/16
+  // after every category had already paid for its provider calls.
+  assertCategoryRoutingSatisfiable();
+
   const checkpointPath = options.checkpointPath ?? `${absolute}.checkpoint.json`;
   const checkpoint = readCheckpoint(checkpointPath);
 
