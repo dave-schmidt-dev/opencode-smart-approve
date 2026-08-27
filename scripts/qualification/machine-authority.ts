@@ -50,14 +50,25 @@ export const COMMAND_SOURCES: readonly CommandSource[] = ["model-authored", "har
 export interface MachineProvenance {
   /** Model that assigned every label, and that wrote the model-authored commands. */
   readonly authorModel: string;
-  /** Variant requested on the authoring call. */
-  readonly authorVariant: string;
   /**
-   * Whether the served variant was confirmed. OpenCode 1.18.10 does not report
-   * a served variant, so this is `unverified` for the same reason the frozen
-   * candidate manifest declines to attest served variant.
+   * Variant requested on the authoring call, or `null` on a harness with no
+   * variant concept. Codex is the latter: it tunes with a separate reasoning
+   * effort and `roster resolve` reports `"variant": null`, so writing the
+   * effort here would record a variant that was never requested on the one
+   * artifact whose whole purpose is provenance.
    */
-  readonly authorVariantServed: "unverified";
+  readonly authorVariant: string | null;
+  /** Reasoning effort requested on the authoring call, or `null` where the harness has none. */
+  readonly authorEffort: string | null;
+  /**
+   * Whether the tuning actually served was confirmed. No harness used here
+   * reports it back: OpenCode 1.18.10 does not report a served variant, and
+   * Codex reports a model id (`gpt-5.6-codex`) that is not even the
+   * dispatchable selector, so a served-effort claim would be a guess. This is
+   * `unverified` for the same reason the frozen candidate manifest declines to
+   * attest served variant.
+   */
+  readonly authorTuningServed: "unverified";
   /** Classifier being measured. Must differ in vendor lineage from the author. */
   readonly classifierUnderTest: string;
   /**
@@ -238,6 +249,13 @@ export function validateMachineReleaseCorpus(
   if (corpus.provenance.disclosure !== MACHINE_AUTHORITY_DISCLOSURE) errors.push("machine authority disclosure is missing or altered");
   if (!corpus.provenance.authorModel || !corpus.provenance.classifierUnderTest) errors.push("machine provenance must name the author and the classifier under test");
   if (corpus.provenance.authorModel === corpus.provenance.classifierUnderTest) errors.push("machine author and classifier under test must differ");
+  // A tuning field must be a real requested value or an explicit `null`. Empty
+  // string is neither, and would read in the artifact as "no tuning recorded"
+  // when it actually means "someone forgot", which are different claims.
+  for (const [field, value] of [["authorVariant", corpus.provenance.authorVariant], ["authorEffort", corpus.provenance.authorEffort]] as const) {
+    if (value !== null && (typeof value !== "string" || value.length === 0)) errors.push(`machine provenance ${field} must be a requested value or null`);
+  }
+  if (corpus.provenance.authorTuningServed !== "unverified") errors.push("machine provenance cannot claim a served tuning it did not confirm");
   // Command origin is declared per category and is signed with the rest of the
   // provenance. A missing or unrecognized entry fails rather than defaulting,
   // because the default a reader would assume is the one the disclosure would

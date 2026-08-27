@@ -14,7 +14,8 @@
  */
 import { spawn } from "node:child_process";
 import { archiveArtifactGroup } from "./artifact-archive";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,17 +41,38 @@ import { validateFrozenCandidateManifest } from "../classifier-gate";
 import type { ModelProfile } from "../../src/reviewer/model-profile";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
+const CODEX_HEADLESS = resolve(homedir(), ".agent/bin/codex-headless");
+/** Authoring call artifacts, kept for post-mortem. Gitignored, like every other log here. */
+const AUTHORING_LOG_DIR = resolve(PROJECT_ROOT, ".logs/authoring");
 const DEVELOPMENT_CORPUS = resolve(PROJECT_ROOT, "fixtures/eval/development.json");
 
-// Changed under duress, not preference. `opencode-go/minimax-m3` authored the
-// first five strata and then began returning `401 Model is disabled` mid-run;
-// it was still disabled 29 minutes later, and the provenance names exactly one
-// author, so a corpus finished by a second model could not be labeled honestly.
-// The whole corpus is re-authored rather than patched.
-export const AUTHOR_MODEL = "opencode-go/qwen3.7-max" as const;
-export const AUTHOR_VARIANT = "thinking" as const;
-export const MACHINE_CORPUS_VERSION = "2026-08-14-machine-release-v3-harvested-benign" as const;
+// Authoring moved off the opencode-go providers on owner instruction: the two
+// $200 subscriptions are already paid for, so a subscription-backed frontier
+// model costs nothing extra and does not repeat the failure that forced the
+// last change. That failure is why the model here has moved twice.
+// `opencode-go/minimax-m3` authored the first five strata and then began
+// returning `401 Model is disabled` mid-run; it was still disabled 29 minutes
+// later, and the provenance names exactly one author, so a corpus finished by
+// a second model could not be labeled honestly and the whole thing was
+// re-authored. `opencode-go/qwen3.7-max` replaced it under that duress.
+//
+// The independence requirement is unchanged and is now better satisfied: the
+// author must not share a blind spot with the classifier under test, which is
+// `opencode-go/deepseek-v4-flash`. It should also not share one with whatever
+// wrote the reviewer prompt, and the prompt in `src/reviewer/prompt.ts` was
+// written by Claude, so an OpenAI author is independent of both sides rather
+// than only of the measured one.
+//
+// `AUTHOR_MODEL` records identity and `AUTHOR_SELECTOR` dispatches. They differ
+// on purpose: Codex's `-m` takes the bare roster selector, and the model id the
+// CLI self-reports (`gpt-5.6-codex`) is not dispatchable at all, so recording a
+// probed id would put an unusable string in the provenance.
+export const AUTHOR_MODEL = "openai/gpt-5.6-terra" as const;
+export const AUTHOR_SELECTOR = "gpt-5.6-terra" as const;
+/** Codex has no variant concept; it tunes with reasoning effort instead. */
+export const AUTHOR_VARIANT = null;
+export const AUTHOR_EFFORT = "high" as const;
+export const MACHINE_CORPUS_VERSION = "2026-08-27-machine-release-v4-terra-authored" as const;
 export const MACHINE_CORPUS_DIGEST_SCHEMA = "classifier-machine-release-corpus-digest/v1" as const;
 export const MACHINE_CORPUS_DIGEST_ALGORITHM = "sha256" as const;
 export const MACHINE_CORPUS_DIGEST_PURPOSE = "byte-identity-only" as const;
@@ -378,75 +400,88 @@ function sha256(value: string): string {
 export class NonRetryableAuthoringError extends Error {}
 
 /**
- * The provider's own error message, which this CLI emits as a JSON envelope on
- * **stdout** and not on stderr. Reporting stderr alone yields a blank
- * diagnostic: when the author model was disabled mid-run, twenty attempts were
- * discarded behind `authoring call exited 1: ` with nothing after the colon,
- * and the underlying 401 was only visible by invoking the binary by hand.
+ * Classify the diagnostic `codex-headless` collects for a failed call.
+ *
+ * The distinction is not cosmetic. When the previous author model was disabled
+ * mid-run, twenty attempts were burned retrying a `401` that could never
+ * succeed, and the underlying cause was only visible by invoking the binary by
+ * hand. Anything that will still be true on the next attempt has to stop the
+ * run rather than feed it.
+ *
+ * Unrecognised failures stay retryable: a transient network fault is the common
+ * case, and wrongly halting a long authoring run is cheaper to recover from
+ * than wrongly looping on a permanent one is to notice.
  */
-export function providerFault(stdout: string): { message: string; retryable: boolean } | undefined {
-  for (const line of stdout.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("{")) continue;
-    let parsed: { type?: string; error?: { name?: string; data?: { message?: string; statusCode?: number; isRetryable?: boolean } } };
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if (parsed.type !== "error") continue;
-    const data = parsed.error?.data ?? {};
-    const status = data.statusCode === undefined ? "" : ` (${data.statusCode})`;
-    // Authentication and authorization faults do not become true by repetition.
-    const retryable = data.isRetryable ?? !(data.statusCode === 401 || data.statusCode === 403);
-    return { message: `${parsed.error?.name ?? "error"}${status}: ${data.message ?? "unspecified"}`, retryable };
+export function providerFault(diagnostic: string): { message: string; retryable: boolean } | undefined {
+  const text = diagnostic.trim();
+  if (text.length === 0) return undefined;
+  const terminal: readonly (readonly [RegExp, string])[] = [
+    [/\b(401|403)\b|unauthorized|not authenticated|invalid[_ ]api[_ ]key/i, "authentication or authorization refused"],
+    // A ChatGPT-account Codex session rejects some selectors outright with a
+    // 400. Retrying re-sends the same unsupported selector.
+    [/not supported when using codex/i, "selector is not dispatchable on this account"],
+    [/model[_ ]not[_ ]found|unknown model|model metadata for .* not found/i, "model selector is unknown to the CLI"],
+    // Quota is retryable in principle but not on this run's timescale, and a
+    // silent multi-hour retry loop is indistinguishable from a hang.
+    [/usage limit|quota exceeded|rate limit reached/i, "subscription usage limit reached"],
+  ];
+  for (const [pattern, reason] of terminal) {
+    if (pattern.test(text)) return { message: `${reason}: ${text.slice(0, 400)}`, retryable: false };
   }
-  return undefined;
+  return { message: text.slice(0, 400), retryable: true };
 }
 
+/**
+ * Invoke the authoring model through the shared headless wrapper.
+ *
+ * The prompt goes to a file rather than onto the command line, which the
+ * wrapper requires for a concrete reason: an inlined prompt is re-escaped by
+ * the calling shell, and this prompt carries JSON braces and quotes, so
+ * inlining truncates it into a request the model answers wrongly rather than
+ * one it rejects visibly.
+ *
+ * Model and effort are both passed explicitly. That is what makes the run
+ * reproducible: the wrapper only consults the roster when a flag is missing, so
+ * pinning both means the corpus is authored by the model its provenance names,
+ * and cannot be silently re-tiered by a roster edit between two runs.
+ */
 function runAuthor(prompt: string, timeoutMs: number): Promise<string> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(OPENCODE_BIN, ["run", "-m", AUTHOR_MODEL, "--variant", AUTHOR_VARIANT, "--format", "json", prompt], {
-      cwd: PROJECT_ROOT,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
+    mkdirSync(AUTHORING_LOG_DIR, { recursive: true });
+    const directory = mkdtempSync(`${AUTHORING_LOG_DIR}/call-`);
+    const promptFile = `${directory}/prompt.txt`;
+    const outFile = `${directory}/result.txt`;
+    writeFileSync(promptFile, prompt, { mode: 0o600 });
+
+    const child = spawn(
+      CODEX_HEADLESS,
+      [promptFile, "--model", AUTHOR_SELECTOR, "--effort", AUTHOR_EFFORT, "--out", outFile],
+      { cwd: PROJECT_ROOT, stdio: ["ignore", "pipe", "pipe"] },
+    );
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       rejectPromise(new Error(`authoring call exceeded ${timeoutMs}ms`));
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stdout.on("data", () => {});
     child.stderr.on("data", (chunk) => { stderr += String(chunk); });
     child.on("error", (error) => { clearTimeout(timer); rejectPromise(error); });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code !== 0) {
-        const fault = providerFault(stdout);
-        const detail = fault?.message ?? stderr.slice(0, 400) ?? "";
-        const message = `authoring call exited ${code}: ${detail.length > 0 ? detail : "no diagnostic on stdout or stderr"}`;
-        return rejectPromise(fault !== undefined && !fault.retryable ? new NonRetryableAuthoringError(message) : new Error(message));
-      }
-      resolvePromise(stdout);
+      const result = existsSync(outFile) ? readFileSync(outFile, "utf8") : "";
+      if (code === 0 && result.trim().length > 0) return resolvePromise(result);
+      // The wrapper writes the provider's own diagnostic beside the result, and
+      // that file is where the cause actually is; its stderr is usually empty.
+      const errFile = `${outFile}.err`;
+      const diagnostic = existsSync(errFile) ? readFileSync(errFile, "utf8") : stderr;
+      const fault = providerFault(diagnostic);
+      const detail = fault?.message ?? "no diagnostic on the result, error, or stderr channel";
+      const message = code === 0
+        ? `authoring call returned no text: ${detail}`
+        : `authoring call exited ${code}: ${detail}`;
+      return rejectPromise(fault !== undefined && !fault.retryable ? new NonRetryableAuthoringError(message) : new Error(message));
     });
   });
-}
-
-/** Concatenate the assistant text parts out of the CLI's JSON event stream. */
-export function extractText(stream: string): string {
-  const parts: string[] = [];
-  for (const line of stream.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("{")) continue;
-    try {
-      const event = JSON.parse(trimmed) as { type?: string; part?: { type?: string; text?: string }; error?: { name?: string; data?: { message?: string } } };
-      if (event.type === "error") throw new Error(`authoring provider error: ${event.error?.name ?? "unknown"} ${event.error?.data?.message ?? ""}`.trim());
-      if (event.type === "text" && event.part?.type === "text" && typeof event.part.text === "string") parts.push(event.part.text);
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith("authoring provider error")) throw error;
-    }
-  }
-  return parts.join("");
 }
 
 /**
@@ -753,7 +788,7 @@ export async function authorCategory(input: {
         alreadyHave: accepted.slice(-20).map((entry) => entry.command),
         routeGoal,
       });
-      const generate = input.generate ?? (async (text: string, timeoutMs: number) => parseAuthored(extractJSONArray(extractText(await runAuthor(text, timeoutMs)))));
+      const generate = input.generate ?? (async (text: string, timeoutMs: number) => parseAuthored(extractJSONArray(await runAuthor(text, timeoutMs))));
       authored = await generate(prompt, input.timeoutMs);
     } catch (error) {
       // A timed-out or unparseable call costs this attempt, not the run. A
@@ -950,7 +985,8 @@ export async function authorMachineCorpus(options: AuthorCorpusOptions): Promise
   const provenance: MachineProvenance = {
     authorModel: AUTHOR_MODEL,
     authorVariant: AUTHOR_VARIANT,
-    authorVariantServed: "unverified",
+    authorEffort: AUTHOR_EFFORT,
+    authorTuningServed: "unverified",
     classifierUnderTest: options.modelProfile.model,
     // Benign commands were executed by real sessions and only labeled by the
     // model. Every other category's commands were written by it. The labels are

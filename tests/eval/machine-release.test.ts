@@ -39,7 +39,6 @@ import {
   authorCategory,
   commandHeads,
   extractJSONArray,
-  extractText,
   providerFault,
   routeGoalFor,
 } from "../../scripts/qualification/author-machine-corpus";
@@ -88,8 +87,9 @@ function developmentGateFixture(terminal: "development-pass" | "stop-disabled" =
 
 const PROVENANCE: MachineProvenance = {
   authorModel: "opencode-go/minimax-m3",
-  authorVariant: "thinking",
-  authorVariantServed: "unverified",
+  authorVariant: null,
+  authorEffort: "high",
+  authorTuningServed: "unverified",
   classifierUnderTest: MODEL_PROFILES["deepseek-v4-flash"].model,
   commandSource: {
     benign: "harvested-local-usage",
@@ -561,17 +561,26 @@ describe("authoring response parsing", () => {
     expect(() => extractJSONArray("I need more context before I can help.")).toThrow();
   });
 
-  test("surfaces a provider error event rather than returning empty text", () => {
-    const stream = '{"type":"error","error":{"name":"ProviderAuthError","data":{"message":"key missing"}}}';
-    expect(() => extractText(stream)).toThrow(/authoring provider error/);
+  test("halts the run on a fault that repetition cannot clear", () => {
+    // Each of these burned attempts or would have. The 401 is the one that
+    // actually happened: the previous author model was disabled mid-run and
+    // twenty attempts retried a refusal that could never succeed.
+    for (const diagnostic of [
+      "codex exited 1.\n--- codex output ---\nstream error: unexpected status 401 Unauthorized",
+      "ERROR: 403 Forbidden",
+      "400 not supported when using Codex with a ChatGPT account",
+      "Model metadata for `gpt-5.6-codex` not found",
+      "You have hit your usage limit for this week.",
+    ]) {
+      expect(providerFault(diagnostic)?.retryable).toBe(false);
+    }
   });
 
-  test("concatenates assistant text parts", () => {
-    const stream = [
-      '{"type":"text","part":{"type":"text","text":"[{\\"command\\":"}}',
-      '{"type":"text","part":{"type":"text","text":" \\"pwd\\", \\"rationale\\": \\"reads\\"}]"}}',
-    ].join("\n");
-    expect(extractText(stream)).toBe('[{"command": "pwd", "rationale": "reads"}]');
+  test("keeps an unrecognised fault retryable and reports nothing as no fault", () => {
+    // Wrongly halting a long authoring run costs one restart; wrongly looping
+    // on a permanent failure is the defect above. Transient wins the default.
+    expect(providerFault("codex exited 1.\n--- codex output ---\nrequest timed out")?.retryable).toBe(true);
+    expect(providerFault("   ")).toBeUndefined();
   });
 });
 
@@ -696,16 +705,23 @@ describe("authoring shape reservation", () => {
     expect(routeGoalFor({ ...mixed, accepted: [{ command: "rm -rf /tmp/scratch", reachesModel: false }] })).toBe("reviewer");
   });
 
-  test("a disabled model is read off stdout, where this CLI writes it", () => {
-    // The provider's envelope goes to stdout and stderr stays empty, so the run
-    // that hit this reported `authoring call exited 1:` with no reason at all.
-    const disabled = providerFault(`[log] starting\n${JSON.stringify({ type: "error", error: { name: "ProviderAuthError", data: { message: "Model is disabled", statusCode: 401 } } })}\n`);
+  test("the diagnostic reaches the caller whatever shape the harness wrote it in", () => {
+    // The incident this locks out: the author model was disabled mid-run and
+    // the failure surfaced as `authoring call exited 1:` with nothing after the
+    // colon, because the reason was on a channel nobody read. The channel has
+    // since changed -- `codex-headless` writes it to `<out>.err` rather than as
+    // a JSON envelope on stdout -- so this asserts the reason survives, not the
+    // shape it arrives in.
+    const disabled = providerFault("codex exited 1.\n--- codex output ---\nstream error: unexpected status 401 Unauthorized; Model is disabled");
     expect(disabled?.retryable).toBe(false);
     expect(disabled?.message).toContain("401");
     expect(disabled?.message).toContain("Model is disabled");
-    const overloaded = providerFault(JSON.stringify({ type: "error", error: { name: "Overloaded", data: { message: "busy", statusCode: 529, isRetryable: true } } }));
+    const overloaded = providerFault("stream error: unexpected status 529 Overloaded; busy");
     expect(overloaded?.retryable).toBe(true);
-    expect(providerFault("plain output with no envelope")).toBeUndefined();
+    expect(overloaded?.message).toContain("529");
+    // A blank diagnostic is the one case that must not masquerade as a reason;
+    // `runAuthor` says so explicitly rather than printing an empty colon.
+    expect(providerFault("   \n  ")).toBeUndefined();
   });
 
   test("a non-retryable provider fault ends authoring instead of burning every attempt", async () => {

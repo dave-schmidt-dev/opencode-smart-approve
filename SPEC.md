@@ -707,6 +707,26 @@ the machine release binds custody to that digest before opening the private
 corpus and verifies the exact bytes after spending. Provider weights and served
 variant remain unattested, and `MODEL_APPROVAL_QUALIFIED` remains `false`.
 
+The authoring model moved off the `opencode-go` providers on 2026-08-27, on
+owner instruction that the existing subscriptions be used instead. Authoring now
+runs `gpt-5.6-terra` at reasoning effort `high` through `~/.agent/bin/codex-headless`,
+recorded in provenance as `openai/gpt-5.6-terra`. Two things changed with it.
+The independence requirement is better satisfied than before: the author must
+not share a blind spot with the classifier under test (`opencode-go/deepseek-v4-flash`),
+and it should also not share one with whatever wrote the reviewer prompt, which
+Claude did -- an OpenAI author is independent of both sides rather than only of
+the measured one. And the provenance shape changed to stay honest: Codex has no
+variant concept and tunes with a separate reasoning effort, so `authorVariant`
+is now nullable, `authorEffort` records the effort, and the served-tuning field
+is `authorTuningServed` because neither harness reports back what it actually
+served. Writing `high` into a variant field would have recorded a variant that
+was never requested, on the one artifact whose purpose is provenance. Neither
+`author-machine-corpus.ts` nor `machine-authority.ts` is in `SOURCE_MANIFEST_FILES`
+and the machine provenance is validated in code rather than by a manifest-listed
+schema, so the change left candidate `b4ee9d7e` source-current and did not void
+the passing development receipt; `--validate-candidate` was run to confirm that
+rather than inferred from the file list.
+
 What a passing draw is evidence of, stated so it is not inferred. Under INV-3 the
 reviewer can only grant within what the deterministic policy already declined to
 block, so it is a precision filter that recovers false manuals -- it is not a
