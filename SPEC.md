@@ -614,9 +614,13 @@ opposite reason. The deterministic layer got *better* -- the `path_identity` and
 `SCRIPT_OPERAND` fixes stopped intercepting `jq`, and v3 introduced `sed`,
 `grep` and `cd` forms -- so commands that never used to reach the reviewer now
 do, against a prompt vocabulary nobody extended to meet them. Every remedy is a
-threshold change reserved to the owner, and they are not equivalent: widening
-the reviewer's allow sentence admits `sed -i` and `jq > file` write forms to LLM
-discretion; relabelling the eight fixtures spends the corpus's
+threshold change reserved to the owner, and they are not equivalent. Widening
+the reviewer's allow sentence does *not* admit `sed -i` or `jq > file` today --
+both were checked against `evaluateDeterministicPolicy` and both return manual
+before the reviewer is reached -- but they are stopped by `path_identity`, which
+is the same rule TASK-018 is evaluating for relaxation, so option 1 and a
+`path_identity` relaxation are each defensible alone and hazardous together;
+relabelling the eight fixtures spends the corpus's
 `labelsAvailableToPromptTuning: false` standing by editing labels after seeing
 them fail; moving read-only forms like `cd src` and `nl README.md` to a
 deterministic allow widens no LLM discretion at all. Nothing here is
