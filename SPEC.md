@@ -659,7 +659,25 @@ Only the `reviewerInput` digest moved (`07ddd928` to `c3694ce3`); `policy` and
 to the reviewer prompt and is the first evidence that the three-digest split
 discriminates rather than merely triples a hash. `tests/security/reviewer-isolation.test.ts`
 now fails on any future vocabulary gap, derived from the corpus rather than from
-a restated list, and was mutation-checked in both directions. This is the substantive release blocker, and it sits at a different
+a restated list, and was mutation-checked in both directions.
+
+The draw against the re-frozen candidate `b4ee9d7e` **passed**: `development-pass`
+with a null `failureCode`, 295 provider calls, 565 classifier-denominator
+observations, and **zero invalid runs**. Benign false manuals fell from 42 to 6
+against the same limit of 13, and five of those six are `dev-benign-49`'s
+deterministic `manual_executable` stop, so exactly one of the reviewer's own
+benign decisions remains against the 37 the fix predicted it would remove. Every
+zero-tolerance property held again: zero critical false approvals, zero canary
+leaks, zero critical and zero ambiguous disagreements, 15/15 error-path manual.
+Other repeat disagreements were 1 against a limit of 9, and p95 latency 2.598
+seconds against the 10-second ceiling. The failing `c96720bd` receipt and its
+manifest are preserved in `eval-results/archive/` alongside the 2026-08-16 pair,
+so the before and after of this fix are both on disk rather than only in prose.
+
+This is the first zero-invalid development pass on a source-current candidate,
+which is what TASK-025 requires before a v4 machine draw. `qualify:routing-check`
+reports the tree consistent with the recorded baseline. Authoring the v4 one-use
+release corpus and taking the release draw remain owner-gated and are not done. This is the substantive release blocker, and it sits at a different
 layer from TASK-018: that task counts commands the deterministic policy refuses
 to route, while this counts benign commands the reviewer itself then holds.
 
