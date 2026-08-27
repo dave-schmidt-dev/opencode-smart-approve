@@ -401,7 +401,10 @@ All six retained tools were refused 0/3 by the reviewer before the fix and
 allow 3/3 (five of six) or 2/3 (`readlink`, one non-reproducing flip) after
 adding them to the allow-list sentence. `grep` and `sed` were tested but not
 added -- both are intercepted by the deterministic policy layer before ever
-reaching the reviewer, so they were never part of this defect. The same edit
+reaching the reviewer, so they were never part of this defect. **That last
+sentence was true when written and is false as of 2026-08-27**: the v3 draw
+finds `grep` and `sed` fixtures routed to the reviewer, so the premise for
+leaving them out of the allow sentence has expired. See the attribution below. The same edit
 also changed the allow-list qualifier from "plain, single-target read" to
 "plain, read-only inspection" to accommodate tools like `join` that take two
 file arguments; this is a semantic loosening distinct from the six added
@@ -581,7 +584,43 @@ Exactly one benign fixture is stopped deterministically -- `dev-benign-49`,
 v2-to-v3 note above predicted. The other 37 false manuals were the reviewer's own
 decisions across the 270 benign invocations it saw, a 13.7% model false-manual
 rate against roughly the 3% the budget leaves it. Clearing the invalid runs would
-not move it. This is the substantive release blocker, and it sits at a different
+not move it.
+
+That rate is not model conservatism, which is what it looked like before anyone
+checked. Cross-referencing the 54 reviewer-routed benign fixtures against
+`src/reviewer/prompt.ts` offline, at no provider cost, finds exactly eight whose
+leading executable is named nowhere in the allow sentence, and eight fixtures at
+five repeats is 40 predicted against 37 observed. Two mechanisms produce them,
+both confirmed by running the production `buildReviewerPrompt` rather than by
+reading it: `nl`, `shasum` and `jq` are absent from `SAFE_EXECUTABLES`, so the
+redactor rewrites them to `<command>` and the prompt's manual rule opens "Return
+manual for: any `<command>` marker", which *mandates* manual for
+`dev-benign-46/47/51/52`; while `grep`, `sed` and `cd` forward un-redacted but
+appear in neither the allow nor the manual sentence, so `dev-benign-41/42/54/55`
+fall to the "does not clearly match the allow list above" catch-all. In both
+groups the reviewer followed its instructions correctly. The corpus labels these
+eight `allow` and the prompt requires `manual`, so the gate is measuring a
+contradiction between two artifacts, not a judgement failure.
+
+The residual is 1 to 3 invocations, not 3: both timeouts fell in the benign set
+(its confusion-matrix row totals 273 against a 275 denominator), so if both
+landed on gap fixtures the prediction is 38 against 37. The receipt carries no
+per-reason-code aggregate and its confusion matrix is category-by-decision only,
+so it cannot separate the marker group from the catch-all group; closing the
+residual exactly needs the local diagnostic dump, not another draw.
+
+This is the `SAFE_EXECUTABLES` vocabulary-gap defect above, recurring for the
+opposite reason. The deterministic layer got *better* -- the `path_identity` and
+`SCRIPT_OPERAND` fixes stopped intercepting `jq`, and v3 introduced `sed`,
+`grep` and `cd` forms -- so commands that never used to reach the reviewer now
+do, against a prompt vocabulary nobody extended to meet them. Every remedy is a
+threshold change reserved to the owner, and they are not equivalent: widening
+the reviewer's allow sentence admits `sed -i` and `jq > file` write forms to LLM
+discretion; relabelling the eight fixtures spends the corpus's
+`labelsAvailableToPromptTuning: false` standing by editing labels after seeing
+them fail; moving read-only forms like `cd src` and `nl README.md` to a
+deterministic allow widens no LLM discretion at all. Nothing here is
+implemented. This is the substantive release blocker, and it sits at a different
 layer from TASK-018: that task counts commands the deterministic policy refuses
 to route, while this counts benign commands the reviewer itself then holds.
 
