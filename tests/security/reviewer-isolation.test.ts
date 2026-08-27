@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { createReviewerAgent } from "../../src/reviewer/agent";
-import { redactCommand } from "../../src/reviewer/prompt";
+import { buildReviewerPrompt, redactCommand } from "../../src/reviewer/prompt";
+import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 
 describe("reviewer isolation", () => {
   test("preserves only bounded operation vocabulary", () => {
@@ -182,5 +184,71 @@ describe("reviewer isolation", () => {
     expect(result.decision).toBe("manual");
     expect(result.reasonCodes).toEqual(["tool_violation"]);
     expect(result.toolCounters.mcp).toBe(1);
+  });
+});
+
+/**
+ * The reviewer's vocabulary lives in three places -- `SAFE_EXECUTABLES` in the
+ * redactor, the allow sentence, and the manual sentence -- and a name present in
+ * the first but absent from the other two falls to the "does not clearly match
+ * the allow list above" catch-all. That is always a false manual and never a
+ * false approval, so it fails quietly: the gate reports a number, not a defect.
+ *
+ * It has now happened twice, both times because something upstream improved.
+ * `cut`/`join`/`readlink`/`sort`/`tr`/`uniq` were forwardable but unnamed; then
+ * on the 2026-08-27 v3 draw `jq`, `nl`, `shasum`, `grep`, `sed` and `cd` reached
+ * the reviewer for the first time because the deterministic layer stopped
+ * intercepting them, against a prompt nobody had extended to meet them. That
+ * cost 37 of the draw's 42 benign false manuals and blocked the release.
+ *
+ * These tests read the corpus rather than restating a list, so the check tracks
+ * what actually routes to the reviewer instead of what someone believed routed
+ * there when they last edited a constant.
+ */
+describe("reviewer vocabulary gaps", () => {
+  const prompt = buildReviewerPrompt({ redactedCommand: "pwd" }).split("\n");
+  const allowSentence = prompt.find((line) => line.startsWith("Allow a plain")) ?? "";
+  const manualSentence = prompt.find((line) => line.startsWith("Return manual for")) ?? "";
+
+  /** Leading executable, skipping the wrappers the redactor also skips. */
+  const leadingExecutable = (command: string): string => {
+    const words = command.trim().split(/\s+/);
+    let index = 0;
+    while (index < words.length - 1 && (words[index] === "command" || words[index] === "env")) index += 1;
+    return (words[index] ?? "").split("/").at(-1)?.toLowerCase() ?? "";
+  };
+
+  test("names every executable the corpus expects allowed and the policy routes to the reviewer", async () => {
+    const corpus = JSON.parse(readFileSync("fixtures/eval/development.json", "utf8")) as {
+      corpus: { fixtures: readonly { id: string; category: string; command: string; expectedDecision: string }[] };
+    };
+    const unnamed: string[] = [];
+    for (const fixture of corpus.corpus.fixtures) {
+      if (fixture.category !== "benign" || fixture.expectedDecision !== "allow") continue;
+      const routed = await evaluateDeterministicPolicy(fixture.command);
+      if (routed.decision !== "model_review") continue;
+      const executable = leadingExecutable(fixture.command);
+      // A bare name can appear inside a longer word, so match on a boundary.
+      const named = new RegExp(`(?:^|[\\s:,])${executable}(?=[\\s,./]|$)`).test(allowSentence);
+      if (!named) unnamed.push(`${fixture.id} (${executable})`);
+    }
+    expect(unnamed).toEqual([]);
+  });
+
+  test("forwards read-only tools under their own name rather than the refused marker", () => {
+    // `<command>` is the first thing the manual sentence refuses, so a redacted
+    // name is not a degraded hint -- it is a decided outcome.
+    expect(manualSentence).toContain("<command>");
+    for (const command of ["jq <arg>", "nl README.md", "shasum -a 256 README.md", "grep -n TODO README.md", "cd src"]) {
+      expect(redactCommand(command)).not.toContain("<command>");
+    }
+  });
+
+  test("shows the reviewer sed's in-place flag whatever suffix it carries", () => {
+    // `-i.bak` fails the flag-shape test on the dot and used to render as a
+    // generic <arg>, hiding the write form from the rule written to refuse it.
+    expect(redactCommand("sed -i.bak 's/a/b/' README.md")).toBe("sed -i <arg> <arg>");
+    expect(redactCommand("sed --in-place=.bak 's/a/b/' README.md")).toBe("sed --in-place <arg> <arg>");
+    expect(manualSentence).toContain("sed -i");
   });
 });
