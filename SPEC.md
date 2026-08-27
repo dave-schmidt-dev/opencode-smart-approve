@@ -327,6 +327,25 @@ held-out set (see below), and a separately reverted structural prompt rewrite
 recorded 4 on development -- so this category is not immune to the same
 provider jitter and needs its own resolution, not just the rate re-derivation.
 
+What that limit measures is bounded by two choices that are correct only in
+combination, and neither is separately defensible. Disagreements are counted
+against `values[0]`, an arbitrary first draw rather than a majority
+(`scripts/qualification/core.ts`), so one unstable fixture costs between 1 and
+`REPEAT_COUNT - 1` disagreements depending on nothing but which repeat the flip
+landed in; at 5 repeats a flip in the first position spends 4 of the 9 allowed
+-- 44% of the budget -- where a majority rule would spend 1. The limit's
+denominator is the whole corpus (113 fixtures x 4 comparisons = 452) although
+only the 59 reviewer-routed fixtures can ever disagree: the other 54 are decided
+deterministically and return the identical verdict every time. Narrowing the
+denominator to the flip-capable set alone drops the limit from 9 to 4 against an
+expected 4.0 disagreements at the measured ~1.7% background rate, which is a
+~37% chance of failing a clean candidate. The inflated denominator is precisely
+what supplies the headroom that a 2% limit set just above a 1.7% measurement
+does not. Recorded as accepted (TASK-030) rather than half-fixed: the two are not
+to be changed independently, and re-deriving them jointly requires a fresh
+background measurement on the v3 corpus and a threshold change, which INV-7 and
+every foundation-freeze waiver reserve to the owner.
+
 Historical gate result: **failed**. An initial live development report (superseded,
 retained at `eval-results/classifier-qualification.failed.json` before the
 threshold re-derivation) recorded 61/200 benign false manual decisions
@@ -550,6 +569,26 @@ strict public `${outputPath}.digest.json` companion containing no fixture data;
 the machine release binds custody to that digest before opening the private
 corpus and verifies the exact bytes after spending. Provider weights and served
 variant remain unattested, and `MODEL_APPROVAL_QUALIFIED` remains `false`.
+
+What a passing draw is evidence of, stated so it is not inferred. Under INV-3 the
+reviewer can only grant within what the deterministic policy already declined to
+block, so it is a precision filter that recovers false manuals -- it is not a
+safety net against harmful commands, and the deterministic layer is. A passing
+draw therefore supports two claims: the classifier allows real read-only work,
+and it conforms to its stated non-allow set. It supports nothing about injection
+resistance, obfuscation, secret handling, or novel destructive commands, because
+those never reach the reviewer as a live decision. Three bounds are recorded
+rather than acted on (TASK-022). First, `MINIMUMS` reserves 30 fixture slots to
+`injection`, `secret` and `obfuscated` at 10 each -- three strata the redaction
+boundary makes unmeasurable. That floor was set before the boundary was
+understood and is accepted unchanged, because lowering it is a threshold
+relaxation reserved to the owner. Second, fixture coverage bounds the rest: v3
+covers the executable allowlist but not the long tail of real invocations, so a
+passing draw is evidence about the command shapes the corpus contains and silent
+about the shapes it does not -- the same blind spot the routing-equivalence
+receipt carries under the 2026-08-26 waiver. Third, the gate measures a sample,
+not a probability: an empirical bound on this corpus against this candidate,
+never a universal false-approval rate.
 
 ### REQ-012: Compatibility and packaging
 
