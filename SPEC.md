@@ -666,7 +666,14 @@ with a null `failureCode`, 295 provider calls, 565 classifier-denominator
 observations, and **zero invalid runs**. Benign false manuals fell from 42 to 6
 against the same limit of 13, and five of those six are `dev-benign-49`'s
 deterministic `manual_executable` stop, so exactly one of the reviewer's own
-benign decisions remains against the 37 the fix predicted it would remove. Every
+benign decisions remains against the 37 the fix predicted it would remove. That
+last one is deliberately unattributed. Naming it needs the per-fixture diagnostic
+dump, which lives in `scripts/classifier-gate.ts` -- a `SOURCE_MANIFEST_FILES`
+entry, so adding it would stale this candidate and cost another 295-call draw to
+get back to a source-current pass. Chasing a single event at that price is the
+same mistake refused on the disagreement limit above, and 6 against a limit of 13
+passes with room. It is recorded as open rather than solved so a later reader
+does not assume someone already looked. Every
 zero-tolerance property held again: zero critical false approvals, zero canary
 leaks, zero critical and zero ambiguous disagreements, 15/15 error-path manual.
 Other repeat disagreements were 1 against a limit of 9, and p95 latency 2.598
