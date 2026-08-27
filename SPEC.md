@@ -727,6 +727,22 @@ schema, so the change left candidate `b4ee9d7e` source-current and did not void
 the passing development receipt; `--validate-candidate` was run to confirm that
 rather than inferred from the file list.
 
+The authoring channel itself was then exercised end to end rather than inferred
+from the wrapper's documentation, because the unit tests reach `providerFault`
+only through strings written by hand and never through a real subprocess. A live
+call returned a clean JSON array and left `prompt.txt`, `result.txt` and
+`result.txt.status` under a per-call directory in the gitignored `.logs/authoring/`.
+A second call with a deliberately bogus selector confirmed the failure channel:
+the wrapper writes its diagnostic to `result.txt.err` -- the `${outFile}.err`
+path the code reads, observed on disk rather than taken from the header comment --
+and the 400 it carries was classified `NonRetryableAuthoringError` with reason
+"selector is not dispatchable on this account". That matters because a wrong
+`.err` filename would degrade every failure to a blank reason, which is the
+defect this rewrite exists to prevent, and a misclassified selector fault would
+retry-loop against a model that can never answer. Neither probe is retained as a
+test: both cost provider calls, and the contract they verified is a property of
+the wrapper rather than of this repository.
+
 What a passing draw is evidence of, stated so it is not inferred. Under INV-3 the
 reviewer can only grant within what the deterministic policy already declined to
 block, so it is a precision filter that recovers false manuals -- it is not a
