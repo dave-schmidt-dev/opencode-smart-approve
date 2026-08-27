@@ -19,9 +19,10 @@
  *   reviewer never sees. It is deliberately over-sensitive: it fails toward
  *   "re-run", which is the safe direction.
  * - `acceptance` covers what turns observations into a verdict: the corpus
- *   labels a draw scores against, the per-category minimums, and the timing
- *   and concurrency thresholds. Identical model input can still produce a
- *   different pass/fail if these move, and `MAX_P95_MS` in particular is
+ *   labels a draw scores against, the per-category minimums, the timing and
+ *   concurrency thresholds, and — via `acceptanceRuleFingerprint` — the
+ *   scoring rules themselves. Identical model input can still produce a
+ *   different pass/fail if any of these move, and `MAX_P95_MS` in particular is
  *   pinned by nothing else the checker reads.
  *
  * The three `errorPath` fixtures are forced to a deterministic manual outcome
@@ -48,19 +49,134 @@ import type { ReviewerPathClass } from "../../src/reviewer/prompt";
 import { loadDevelopmentCorpus } from "../classifier-gate";
 import {
   canonical,
+  evaluateCorpus,
+  hashQualificationRecord,
   MAX_CONCURRENT_REVIEWERS,
   MAX_P95_MS,
   MINIMUMS,
+  REASON_CODES,
   REPEAT_COUNT,
   REVIEW_TIMEOUT_MS,
   sha256,
   TEMPERATURE,
+  type Corpus,
+  type Decision,
   type Fixture,
   type FixtureCategory,
+  type QualificationRecord,
   type Route,
 } from "./core";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+/**
+ * Fingerprint of the rules that turn observations into a verdict.
+ *
+ * The `acceptance` digest covered the corpus, the five harness parameters, the
+ * category minimums, and the labels — everything a draw is scored *against*,
+ * and nothing about how the scoring works. But `assertCorpusReport` fails a
+ * draw on `otherDisagreements > otherDisagreementLimit`, and neither that limit,
+ * nor the rate it is derived from, nor the repeat-comparison rule that produces
+ * the numerator appeared in any digest. Switching the comparison at
+ * `evaluateCorpus` from the first value to a majority, or moving the 2% rate,
+ * therefore moved a pass/fail while `qualify:routing-check` still reported all
+ * three digests identical.
+ *
+ * That is the exact condition the 2026-08-26 owner decision relies on: a receipt
+ * may stand against a stale source manifest when the three digests match,
+ * because "the same acceptance criteria score it." As implemented that claim was
+ * not true, so a receipt could survive a change to the rule that scored it.
+ *
+ * The fix runs the real `evaluateCorpus` over a fixed synthetic corpus rather
+ * than restating its thresholds here. Restating is what `MINIMUMS` already does
+ * across `assertThresholdConfiguration` and every corpus file, and those copies
+ * drift; a probe cannot, because it observes the production function.
+ *
+ * This tightens the gate and relaxes nothing: strictly more changes now require
+ * a fresh draw.
+ */
+const PROBE_FIXTURE_COUNT = 100;
+
+/**
+ * The probe corpus is sized and patterned, not arbitrary.
+ *
+ * 100 fixtures give the derived limits resolution to move on a rate change:
+ * `floor(0.02 * 100 * (5 - 1))` is 8, so any rate below 0.0175 or at or above
+ * 0.0225 lands on a different integer. A smaller corpus floors everything to
+ * zero and would fingerprint nothing.
+ *
+ * The dissent sits in the *first* repeat because that is where the two counting
+ * rules disagree most: the first-value comparison charges 4 disagreements and a
+ * majority rule charges 1. A dissent in any later position costs 1 under both
+ * and would leave the swap invisible.
+ */
+function probeCorpus(): Corpus {
+  const categoryFor = (index: number): FixtureCategory => index % 5 === 0 ? "ambiguous" : index % 5 === 1 ? "dangerous" : "benign";
+  return {
+    version: "acceptance-rule-probe",
+    labelsAvailableToPromptTuning: false,
+    labelAccess: "development-only",
+    fixtures: Array.from({ length: PROBE_FIXTURE_COUNT }, (_, index): Fixture => {
+      const category = categoryFor(index);
+      return {
+        id: `probe-${String(index).padStart(3, "0")}`,
+        category,
+        command: `probe ${index}`,
+        expectedDecision: category === "benign" ? "allow" : "manual",
+      };
+    }),
+  };
+}
+
+function probeRecords(corpus: Corpus): readonly QualificationRecord[] {
+  return corpus.fixtures.flatMap((fixture, fixtureIndex) =>
+    Array.from({ length: REPEAT_COUNT }, (_, repeatIndex): QualificationRecord => {
+      const repeat = (repeatIndex + 1) as QualificationRecord["repeat"];
+      const dissents = fixtureIndex % 3 === 0 && repeat === 1;
+      const decision: Decision = dissents ? "allow" : "manual";
+      const base = {
+        observationID: `probe-obs-${fixtureIndex}-${repeat}`,
+        route: "reviewer" as Route,
+        providerAttempted: true,
+        decision,
+        reasonCodes: [REASON_CODES[0]!],
+        schemaValid: true,
+        metricEligible: true,
+        outcome: "classifier" as const,
+        terminalKind: "valid_model" as const,
+      };
+      return {
+        ...base,
+        fixtureID: fixture.id,
+        category: fixture.category,
+        repeat,
+        expectedDecision: fixture.expectedDecision,
+        responseHash: hashQualificationRecord(base),
+        latencyMs: 1,
+      };
+    }),
+  );
+}
+
+/** Verdict-determining outputs of the production scorer, observed rather than restated. */
+export function acceptanceRuleFingerprint(): Record<string, unknown> {
+  const corpus = probeCorpus();
+  const report = evaluateCorpus("development", corpus, probeRecords(corpus), "synthetic");
+  return {
+    criticalDisagreements: report.criticalDisagreements,
+    ambiguousDisagreements: report.ambiguousDisagreements,
+    otherDisagreements: report.otherDisagreements,
+    disagreementDenominator: report.disagreementDenominator,
+    otherDisagreementLimit: report.otherDisagreementLimit,
+    benignFalseManualNumerator: report.benignFalseManualNumerator,
+    benignFalseManualDenominator: report.benignFalseManualDenominator,
+    benignFalseManualLimit: report.benignFalseManualLimit,
+    criticalFalseApprovalCount: report.criticalFalseApprovalCount,
+    errorPathManualRate: report.errorPathManualRate,
+    thresholdStatement: report.thresholdStatement,
+  };
+}
+
 const DEVELOPMENT_CORPUS_PATH = resolve(PROJECT_ROOT, "fixtures/eval/development.json");
 
 /** Committed so routing drift is visible in review; `eval-results/` is gitignored. */
@@ -261,6 +377,7 @@ export async function buildRoutingEquivalenceSnapshot(
       developmentCorpusHash,
       parameters,
       minimums,
+      acceptanceRules: acceptanceRuleFingerprint(),
       labels: entries.map((entry) => ({ id: entry.id, category: entry.category, expectedDecision: entry.expectedDecision })),
     })),
   };

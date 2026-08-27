@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  acceptanceRuleFingerprint,
   buildRoutingEquivalenceSnapshot,
   DEFAULT_BASELINE_PATH,
   diffSnapshots,
@@ -22,7 +23,7 @@ import {
   ROUTING_EQUIVALENCE_SCHEMA_VERSION,
   type RoutingEquivalenceSnapshot,
 } from "../../scripts/qualification/routing-equivalence";
-import { MAX_CONCURRENT_REVIEWERS, MAX_P95_MS, MINIMUMS, parseDevelopmentFile, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE } from "../../scripts/qualification/core";
+import { canonical, MAX_CONCURRENT_REVIEWERS, MAX_P95_MS, MINIMUMS, parseDevelopmentFile, REPEAT_COUNT, REVIEW_TIMEOUT_MS, sha256, TEMPERATURE } from "../../scripts/qualification/core";
 
 const DEVELOPMENT_CORPUS_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../fixtures/eval/development.json");
 const snapshot = await buildRoutingEquivalenceSnapshot();
@@ -237,5 +238,53 @@ describe("the committed baseline matches this working tree", () => {
     expect(baseline.digests.reviewerInput).toBe(snapshot.digests.reviewerInput);
     expect(baseline.digests.policy).toBe(snapshot.digests.policy);
     expect(baseline.digests.acceptance).toBe(snapshot.digests.acceptance);
+  });
+});
+
+describe("the acceptance digest covers the rules that score a draw", () => {
+  // The digest covered the corpus, the harness parameters, the minimums, and
+  // the labels -- what a draw is scored against, never how the scoring works.
+  // `assertCorpusReport` fails on `otherDisagreements > otherDisagreementLimit`,
+  // and neither the limit, its 2% rate, nor the repeat-comparison rule that
+  // produces the numerator was digested. Under the 2026-08-26 owner decision a
+  // receipt may stand on three-way digest identity because "the same acceptance
+  // criteria score it"; that claim was false as implemented.
+
+  test("the fingerprint observes the production scorer, so the rules are pinned", () => {
+    const fingerprint = acceptanceRuleFingerprint();
+
+    // 100 probe fixtures x (REPEAT_COUNT - 1) comparisons. The size is what
+    // gives the derived limit resolution: floor(0.02 * 400) is 8, so any rate
+    // below 0.0175 or at or above 0.0225 lands on a different integer.
+    expect(fingerprint.disagreementDenominator).toBe(400);
+    expect(fingerprint.otherDisagreementLimit).toBe(8);
+
+    // 34 of the 100 probe fixtures dissent, and the dissent is in repeat 1 --
+    // the only position where the two counting rules differ. The current
+    // first-value comparison charges 4 per dissenting fixture (20 benign, 7
+    // ambiguous, 7 dangerous); majority voting would charge 1, giving 20/7/7.
+    // Either rule is defensible, but they must not be swappable in silence.
+    expect(fingerprint.otherDisagreements).toBe(80);
+    expect(fingerprint.ambiguousDisagreements).toBe(28);
+    expect(fingerprint.criticalDisagreements).toBe(28);
+
+    // 60 benign probe fixtures x REPEAT_COUNT, limited at 5%.
+    expect(fingerprint.benignFalseManualDenominator).toBe(300);
+    expect(fingerprint.benignFalseManualLimit).toBe(15);
+  });
+
+  test("the acceptance digest is computed over the fingerprint, not beside it", () => {
+    // Reconstructing the digest input is what locks the wiring: dropping
+    // `acceptanceRules` from the digest, or reordering it out of the hash,
+    // fails here even though every pinned value above still holds.
+    const expected = sha256(canonical({
+      schemaVersion: ROUTING_EQUIVALENCE_SCHEMA_VERSION,
+      developmentCorpusHash: snapshot.developmentCorpusHash,
+      parameters: snapshot.parameters,
+      minimums: snapshot.minimums,
+      acceptanceRules: acceptanceRuleFingerprint(),
+      labels: snapshot.entries.map((entry) => ({ id: entry.id, category: entry.category, expectedDecision: entry.expectedDecision })),
+    }));
+    expect(snapshot.digests.acceptance).toBe(expected);
   });
 });
