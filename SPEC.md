@@ -623,8 +623,43 @@ is the same rule TASK-018 is evaluating for relaxation, so option 1 and a
 relabelling the eight fixtures spends the corpus's
 `labelsAvailableToPromptTuning: false` standing by editing labels after seeing
 them fail; moving read-only forms like `cd src` and `nl README.md` to a
-deterministic allow widens no LLM discretion at all. Nothing here is
-implemented. This is the substantive release blocker, and it sits at a different
+deterministic allow widens no LLM discretion at all.
+
+That third option does not exist. `DeterministicDecision` is
+`"manual" | "model_review" | "replan"`, with no allow state: the deterministic
+layer can only refuse or defer, and every approval in this system comes from the
+reviewer by design. It is recorded here because it was offered to the owner as a
+lower-risk remedy and was not implementable as described.
+
+The owner authorized the first option on 2026-08-27, on the grounds that naming
+read-only commands in the allow sentence is what the previous round of this same
+defect already did. `nl`, `shasum` and `jq` were added to `SAFE_EXECUTABLES` so
+the redactor stops rewriting them to `<command>`, and those three plus `grep`,
+`sed` and `cd` were added to the allow sentence. The "plain, read-only
+inspection" qualifier was deliberately left alone, since SPEC already names it as
+the first thing to revert if ambiguous disagreements appear.
+
+Two tightenings ship in the same change, because naming `sed` is the one addition
+that is not read-only in every form. `sed -i` and `sed --in-place` are now
+refused by name in the manual sentence, so the reviewer declines the write form
+on its own authority instead of relying on `path_identity` -- the rule TASK-018
+is weighing for relaxation. And the redactor now normalizes a suffixed in-place
+flag to its bare form: `sed -i.bak` failed the flag-shape test on the dot and
+rendered as a generic `<arg>`, which hid the write flag from the rule written to
+refuse it. The suffix itself is still never shown.
+
+The remaining additions were checked rather than assumed. `grep` opens no new
+reading surface: a named sensitive path (`grep -n TOKEN .env`) is stopped by the
+privacy scan and an unbounded recursive search (`grep -rn PASSWORD .`) by path
+identity, both before the reviewer is reached. `jq` and `nl` have no write form,
+and `jq ... > out.json` is a redirect the upstream gate already refuses.
+
+Only the `reviewerInput` digest moved (`07ddd928` to `c3694ce3`); `policy` and
+`acceptance` are unchanged, which is the correct signature for a change confined
+to the reviewer prompt and is the first evidence that the three-digest split
+discriminates rather than merely triples a hash. `tests/security/reviewer-isolation.test.ts`
+now fails on any future vocabulary gap, derived from the corpus rather than from
+a restated list, and was mutation-checked in both directions. This is the substantive release blocker, and it sits at a different
 layer from TASK-018: that task counts commands the deterministic policy refuses
 to route, while this counts benign commands the reviewer itself then holds.
 
