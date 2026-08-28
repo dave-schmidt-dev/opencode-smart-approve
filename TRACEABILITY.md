@@ -78,8 +78,11 @@ evidence about the harness only.
 The release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`; it is `release-disabled` on
 classifier evidence, not on authorship — the 2026-08-14 owner decision under
-INV-9 accepts a `machine-adjudicated` corpus, and the most recent draw returned
-`machine-release-fail`.
+INV-9 accepts a `machine-adjudicated` corpus, and the 2026-08-28 draw at custody
+consumption 4 — the first of four to complete, with all 320 provider calls
+landing and one transport fault — returned `machine-release-fail` on 36/200
+benign false manuals and 12/47 ambiguous disagreements, with 0/70 critical false
+approvals.
 
 ## INV-7 runner evidence
 
