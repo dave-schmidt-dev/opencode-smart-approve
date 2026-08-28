@@ -185,6 +185,20 @@ aggregate carries `transportFaults` (phase, error name, HTTP status, code, and
 count, never command or provider bytes) so a reader can tell a bad transport
 apart from a bad classifier.
 
+`--preflight` runs every check a draw makes before it calls a provider, and
+spends nothing: the runtime pin, the development gate, the destination, the
+digest companion, and then the corpus itself -- its private bytes against the
+companion, its schema and strata, its classifier and candidate bindings, and
+every declared route re-observed against this checkout's policy. Those last
+checks otherwise run on the spent side of the ledger, because the commands are
+private and cannot be read before the spend, and a rejection there consumes a
+consumption while writing no abort record at all. The preflight calls the same
+`openReleaseCorpus` the draw calls, over the same bytes, so clearing it leaves
+the transport as the only thing a draw can still be lost to. It never opens a
+provider connection: the pre-spend probe belongs to the run that is about to
+spend, and a preflight that made it would be a draw's first step under another
+name.
+
 Both release paths require a source-current `development-pass` report bound to
 the same candidate and reject `stop-disabled` or stale reports. The machine path
 performs this validation before ledger initialization/spend and before reading

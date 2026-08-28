@@ -11,7 +11,7 @@
  * good. Every decision in these aggregates was chosen by the script.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_CONCURRENT_REVIEWERS, REPEAT_COUNT } from "../../scripts/qualification/core";
@@ -35,6 +35,7 @@ import {
   normalizeMachineTerminalKind,
   runBlindedDraw,
   runMachineRelease,
+  runMachineReleasePreflight,
   writeMachineReleaseAggregate,
   type MachineAggregate,
 } from "../../scripts/qualification/machine-release";
@@ -212,6 +213,89 @@ describe("rehearsal corpus", () => {
     // The pre-spend probe opens a session too, and must not be scripted as a draw.
     expect(parseRehearsalTitle("smart-approve:probe", 0)).toBeUndefined();
     expect(parseRehearsalTitle(undefined, 0)).toBeUndefined();
+  });
+});
+
+/**
+ * `--preflight` moves the corpus checks to the `available` side of the ledger.
+ *
+ * They cannot move there in a draw: the commands are private, so the corpus is
+ * only readable once custody is spent, and a rejection there consumes a
+ * consumption and writes no abort record. The preflight runs the same function
+ * over the same bytes and spends nothing, so the only thing a cleared draw can
+ * still lose to is the transport.
+ */
+describe("preflight clears a draw without spending it", () => {
+  function preflightArtifacts(label: string, corpus: MachineReleaseCorpus) {
+    return writeRehearsalArtifacts({
+      root: scratchRoot(label),
+      corpus,
+      candidate: gate.candidate,
+      developmentReport: gate.report,
+      candidateManifestHash: gate.candidate.manifestHash,
+    });
+  }
+
+  async function preflight(artifacts: ReturnType<typeof writeRehearsalArtifacts>) {
+    const previousAuth = process.env.OPENCODE_AUTH_PATH;
+    process.env.OPENCODE_AUTH_PATH = artifacts.authPath;
+    try {
+      return await runMachineReleasePreflight({
+        corpusPath: artifacts.corpusPath,
+        ledgerPath: artifacts.ledgerPath,
+        aggregatePath: artifacts.aggregatePath,
+        candidatePath: artifacts.candidatePath,
+        developmentReportPath: artifacts.developmentReportPath,
+        // Names the run a rehearsal so the destination check agrees with the
+        // artifact name, and proves the preflight never opens it: a preflight
+        // that reached the transport would be a draw's first step renamed.
+        openTransport: async () => { throw new Error("preflight must not open a transport"); },
+      });
+    } finally {
+      if (previousAuth === undefined) delete process.env.OPENCODE_AUTH_PATH;
+      else process.env.OPENCODE_AUTH_PATH = previousAuth;
+    }
+  }
+
+  test("a sound corpus clears, and the ledger is still untouched", async () => {
+    const corpus = await corpusPromise;
+    const artifacts = preflightArtifacts("preflight-ok", corpus);
+    const report = await preflight(artifacts);
+    expect(report.preflight).toBe("ok");
+    expect(report.executionMode).toBe("rehearsal");
+    expect(report.candidateManifestHash).toBe(gate.candidate.manifestHash);
+    expect(report.fixtures).toBe(corpus.release.length);
+    expect(report.reviewerRoutedFixtures).toBe(reviewerRouted(corpus).length);
+    // The whole point. A preflight that spent would be the thing it prevents.
+    expect(report.ledgerExists).toBe(false);
+    expect(existsSync(artifacts.ledgerPath)).toBe(false);
+    expect(existsSync(artifacts.aggregatePath)).toBe(false);
+  }, 120_000);
+
+  test("a corpus that fails its own digest is caught with custody intact", async () => {
+    const corpus = await corpusPromise;
+    const artifacts = preflightArtifacts("preflight-bad", corpus);
+    // Any rejection inside `openReleaseCorpus` is one that would otherwise land
+    // after the spend and write no abort record; the digest is the cheapest of
+    // them to provoke.
+    appendFileSync(artifacts.corpusPath, " ");
+    await expect(preflight(artifacts)).rejects.toThrow(/digest does not match/);
+    expect(existsSync(artifacts.ledgerPath)).toBe(false);
+  }, 120_000);
+
+  test("the draw and the preflight validate the corpus through the same function", () => {
+    // Two copies of these checks would drift, and a preflight that passed while
+    // the draw rejected would be worse than no preflight at all.
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    expect(source.match(/await openReleaseCorpus\(/g)?.length).toBe(2);
+    expect(source.match(/assertObservedRoutes\(corpus\.release\)/g)?.length).toBe(1);
+    // The pre-spend half is shared too, and the preflight must stop before the
+    // spend rather than reimplement what precedes it.
+    expect(source.match(/validateMachineReleaseInputs\(options\)/g)?.length).toBe(2);
+    const body = source.slice(source.indexOf("export async function runMachineReleasePreflight"), source.indexOf("export async function runMachineRelease("));
+    expect(body).not.toContain("spendBeforePrivateInput");
+    expect(body).not.toContain("probeProvider");
+    expect(body).not.toContain("runBlindedDraw");
   });
 });
 

@@ -69,6 +69,10 @@ behind: a clean pass, a seeded critical false approval, unparseable answers as
 invalid runs, a session-creation cascade, a transport that dies mid-draw, a
 degradation too scattered to trip the abort limit whose causes still reach the
 aggregate's `transportFaults`, and a probe failure that leaves custody unspent.
+It also covers `--preflight`: a sound corpus clearing with the ledger still
+absent, a corpus that fails its own digest rejected with custody intact, and the
+draw and the preflight validating through one shared `openReleaseCorpus` rather
+than two copies that could disagree.
 Its artifacts carry a rehearsal schema and `executionMode: "rehearsal"`, and are
 evidence about the harness only.
 The release checkpoint is recorded in

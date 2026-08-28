@@ -1119,8 +1119,22 @@ export interface MachineReleaseOptions {
   readonly onStatus?: (message: string) => void;
 }
 
-export async function runMachineRelease(options: MachineReleaseOptions): Promise<MachineAggregate> {
-  const onStatus = options.onStatus ?? (() => undefined);
+/** A release run's options minus the stamp only a scored artifact needs. */
+export type MachineReleasePreflightOptions = Omit<MachineReleaseOptions, "generatedAt">;
+
+/**
+ * The pre-spend half of a release run: every check that can be made while the
+ * ledger is still `available`.
+ *
+ * Extracted so `--preflight` runs this exact code rather than a copy of it. A
+ * mirror in a scratch script only ever proves the mirror.
+ */
+function validateMachineReleaseInputs(options: MachineReleasePreflightOptions): {
+  readonly candidate: FrozenCandidateManifest;
+  readonly corpusPath: string;
+  readonly digestCompanion: string;
+  readonly executionMode: MachineExecutionMode;
+} {
   // Resolved like every other caller-supplied path here, so a relative
   // `--candidate` is read against the operator's cwd rather than left to
   // whatever happens to be current when the read lands.
@@ -1132,14 +1146,97 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const executionMode: MachineExecutionMode = options.openTransport ? "rehearsal" : "live";
   assertAggregateDestination(options.aggregatePath, executionMode);
   assertDevelopmentGate(candidate, options.developmentReportPath ?? DEVELOPMENT_REPORT_PATH);
-  // Every irreversible step is below this line. Fail on a missing binary, a
-  // wrong OpenCode version, or an unset auth path while the ledger is still
-  // `available` — an environment mistake must not consume a one-use custody.
   assertQualificationRuntime();
   const corpusPath = resolve(options.corpusPath);
   const digestPath = machineCorpusDigestPath(corpusPath);
   const digestCompanion = validateMachineCorpusDigestCompanion(JSON.parse(readFileSync(digestPath, "utf8")), candidate.manifestHash);
   if (existsSync(resolve(options.aggregatePath))) throw new Error("machine release aggregate already exists");
+  return { candidate, corpusPath, digestCompanion, executionMode };
+}
+
+/**
+ * Open the release corpus and check every claim it makes about this checkout.
+ *
+ * In a draw all of this runs on the spent side of the ledger, because the
+ * commands are private and cannot be read before the spend. That ordering is
+ * deliberate and stays. It also means a stale binding or a drifted route
+ * destroys a consumption and produces nothing at all -- the abort record covers
+ * a dead transport, not a rejected corpus. So the same function is reachable
+ * from `--preflight`, where it costs nothing.
+ */
+export async function openReleaseCorpus(corpusPath: string, digestCompanion: string, candidate: FrozenCandidateManifest): Promise<MachineReleaseCorpus> {
+  const corpusBytes = readFileSync(corpusPath, "utf8");
+  if (digestPrivateBytes(corpusBytes) !== digestCompanion) throw new Error("machine release corpus digest does not match its public companion");
+  const corpus = JSON.parse(corpusBytes) as MachineReleaseCorpus;
+  const development = developmentShapeSets();
+  const errors = validateMachineReleaseCorpus(corpus, development.ids, development.shapes);
+  if (errors.length > 0) throw new Error(`machine release corpus failed validation: ${errors.join("; ")}`);
+  assertCorpusModelBinding(corpus, candidate.candidate.modelProfile);
+  // The corpus binding is only a well-formed digest to `validateMachineReleaseCorpus`.
+  // Tie it to the candidate this run actually executes against, so the aggregate
+  // cannot name a candidate that never produced it.
+  if (corpus.bindings.candidateManifestHash !== candidate.manifestHash) throw new Error(`corpus is bound to candidate ${corpus.bindings.candidateManifestHash.slice(0, 8)} but the current candidate is ${candidate.manifestHash.slice(0, 8)}`);
+  // Every route in the corpus is a claim about this checkout's policy. Check the
+  // claims against the policy before the draw, or a wrong one is scored as a
+  // classifier result.
+  await assertObservedRoutes(corpus.release);
+  return corpus;
+}
+
+/** What a preflight can say without opening a provider connection. */
+export interface MachineReleasePreflightReport {
+  readonly preflight: "ok";
+  readonly executionMode: MachineExecutionMode;
+  readonly candidateManifestHash: string;
+  readonly corpusVersion: string;
+  readonly corpusDigest: string;
+  readonly fixtures: number;
+  readonly reviewerRoutedFixtures: number;
+  readonly ledgerExists: boolean;
+}
+
+/**
+ * Run every check a draw makes before it starts calling the provider, and spend
+ * nothing.
+ *
+ * This exists because of where the checks have to sit. Everything in
+ * `openReleaseCorpus` runs after the spend in a real draw, and any of it can
+ * throw a plain `Error`, which writes no abort record: the ledger is consumed
+ * and the run has nothing to show. That is the shape of loss this corpus has
+ * already suffered. A preflight is the same checks on the `available` side, so
+ * the only thing a draw can still lose to is the transport.
+ *
+ * It deliberately does not probe the provider. The probe is a provider call and
+ * belongs to the run that is about to spend; a preflight that made it would be
+ * a draw's first step wearing another name.
+ */
+export async function runMachineReleasePreflight(options: MachineReleasePreflightOptions): Promise<MachineReleasePreflightReport> {
+  const onStatus = options.onStatus ?? (() => undefined);
+  const { candidate, corpusPath, digestCompanion, executionMode } = validateMachineReleaseInputs(options);
+  onStatus(`candidate ${candidate.manifestHash.slice(0, 8)}: runtime, development gate and destination pass`);
+  const corpus = await openReleaseCorpus(corpusPath, digestCompanion, candidate);
+  const reviewerRoutedFixtures = corpus.release.filter((fixture) => fixture.route === "reviewer").length;
+  onStatus(`corpus ${corpus.corpusVersion}: ${corpus.release.length} fixtures, ${reviewerRoutedFixtures} reviewer-routed, routes observed`);
+  return {
+    preflight: "ok",
+    executionMode,
+    candidateManifestHash: candidate.manifestHash,
+    corpusVersion: corpus.corpusVersion,
+    corpusDigest: digestCompanion,
+    fixtures: corpus.release.length,
+    reviewerRoutedFixtures,
+    ledgerExists: existsSync(resolve(options.ledgerPath)),
+  };
+}
+
+export async function runMachineRelease(options: MachineReleaseOptions): Promise<MachineAggregate> {
+  const onStatus = options.onStatus ?? (() => undefined);
+  // Every irreversible step is below this line. A missing binary, a wrong
+  // OpenCode version, an unset auth path, a stale development gate or an
+  // occupied destination all fail while the ledger is still `available` — an
+  // environment mistake must not consume a one-use custody. `--preflight` runs
+  // exactly this, and stops here.
+  const { candidate, corpusPath, digestCompanion, executionMode } = validateMachineReleaseInputs(options);
   // The commitment is machine-generated and labeled as such. It binds this run
   // to these exact bytes; it is not a stand-in for a custodian's signature.
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -1198,23 +1295,12 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   }
 
   async function drawAndScore(): Promise<MachineAggregate> {
-  const corpusBytes = readFileSync(corpusPath, "utf8");
-  if (digestPrivateBytes(corpusBytes) !== digestCompanion) throw new Error("machine release corpus digest does not match its public companion");
-  const corpus = JSON.parse(corpusBytes) as MachineReleaseCorpus;
-  const development = developmentShapeSets();
-  const errors = validateMachineReleaseCorpus(corpus, development.ids, development.shapes);
-  if (errors.length > 0) throw new Error(`machine release corpus failed validation: ${errors.join("; ")}`);
-  assertCorpusModelBinding(corpus, candidate.candidate.modelProfile);
-  // The corpus binding is only a well-formed digest to `validateMachineReleaseCorpus`.
-  // Tie it to the candidate this run actually executes against, so the aggregate
-  // cannot name a candidate that never produced it.
-  if (corpus.bindings.candidateManifestHash !== candidate.manifestHash) throw new Error(`corpus is bound to candidate ${corpus.bindings.candidateManifestHash.slice(0, 8)} but the current candidate is ${candidate.manifestHash.slice(0, 8)}`);
-  // Every route in the corpus is a claim about this checkout's policy. Check the
-  // claims against the policy before the draw, or a wrong one is scored as a
-  // classifier result. Custody is already spent by here — the commands are
-  // private and cannot be read before the spend — but a failure at this point
-  // still costs nothing but the ledger entry, which the aggregate discloses.
-  await assertObservedRoutes(corpus.release);
+  // Custody is already spent by here: the commands are private and cannot be
+  // read before the spend, so every check in `openReleaseCorpus` costs a
+  // consumption if it fails, and fails with no abort record. That is what
+  // `--preflight` is for — the same function, the same bytes, run while the
+  // ledger is still `available`.
+  const corpus = await openReleaseCorpus(corpusPath, digestCompanion, candidate);
 
   // Only reviewer-routed fixtures reach the model. Secret and error-path
   // fixtures are deterministic-manual by rubric and never call a provider.
@@ -1306,6 +1392,11 @@ export async function main(rawArgv = process.argv.slice(2)): Promise<number> {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
+  // Filtered rather than positional, so it can be typed anywhere in the line
+  // and cannot silently become the corpus path. A preflight spends nothing and
+  // draws nothing; it is not an abbreviated run.
+  const preflight = argv.includes("--preflight");
+  argv = argv.filter((argument) => argument !== "--preflight");
   const corpusPath = argv[0] ?? resolve(PROJECT_ROOT, "eval-results/machine-release-corpus.json");
   // One default ledger path is shared by every corpus, which is why the second
   // positional argument exists: a new corpus must be given its own path. That
@@ -1314,9 +1405,24 @@ export async function main(rawArgv = process.argv.slice(2)): Promise<number> {
   // and the refusal now says so instead of reporting a plain re-draw.
   const ledgerPath = argv[1] ?? resolve(PROJECT_ROOT, "eval-results/machine-custody-ledger.json");
   const aggregatePath = argv[2] ?? resolve(PROJECT_ROOT, "eval-results/machine-release-aggregate.json");
+  // A preflight writes nothing, so it has nothing to stamp and no prior
+  // consumptions to disclose. It returns here rather than falling through, so
+  // no later line can mistake it for a run that was merely configured oddly.
+  if (preflight) {
+    try {
+      const report = await runMachineReleasePreflight({ corpusPath, ledgerPath, aggregatePath, candidatePath, developmentReportPath, onStatus: (message) => console.error(`[preflight] ${message}`) });
+      // Said in the output, not only in the flag, so this cannot be read as a
+      // draw's result by whoever finds it next.
+      console.log(JSON.stringify({ ...report, custody: "untouched: no draw was run" }, null, 2));
+      return 0;
+    } catch (error) {
+      console.error(`[preflight] failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
   const generatedAt = argv[3];
   if (!generatedAt) {
-    console.error("usage: machine-release.ts [--candidate <manifest>] [--development-report <report>] <corpus> <ledger> <aggregate> <iso-timestamp> [prior-consumptions-json]");
+    console.error("usage: machine-release.ts [--candidate <manifest>] [--development-report <report>] [--preflight] <corpus> <ledger> <aggregate> <iso-timestamp> [prior-consumptions-json]");
     return 1;
   }
   // Declaring a prior consumption is a disclosure, not a bypass: it raises this
