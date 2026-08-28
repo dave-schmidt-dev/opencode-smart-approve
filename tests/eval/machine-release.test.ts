@@ -27,7 +27,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_SESSION_FAILURE_LIMIT, MachineDrawAbortedError, nextSessionFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_SESSION_FAILURE_LIMIT, machineAbortRecordPath, MachineDrawAbortedError, nextSessionFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun, SERVER_BOOT_ATTEMPTS, writeMachineAbortRecord } from "../../scripts/qualification/machine-release";
 import { MODEL_PROFILES } from "../../src/reviewer/model-profile";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { digestPrivateBytes, initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
@@ -1190,5 +1190,71 @@ describe("draw infrastructure guards", () => {
     expect(source).not.toContain('stderr: "ignore"');
     expect(source).toContain("stdout: logFd");
     expect(source).toContain("stderr: logFd");
+  });
+});
+
+describe("aborted draws leave durable evidence", () => {
+  test("the abort record is a sibling of the aggregate, never the aggregate itself", () => {
+    const path = machineAbortRecordPath("/tmp/x/machine-release-aggregate-v5.json");
+    expect(path).toBe("/tmp/x/machine-release-aggregate-v5-aborted.json");
+    expect(path).not.toBe("/tmp/x/machine-release-aggregate-v5.json");
+  });
+
+  test("the record explains a spent custody and is not scoreable as a draw", () => {
+    const directory = mkdtempSync(join(tmpdir(), "smart-approve-abort-record-"));
+    const aggregatePath = join(directory, "machine-release-aggregate-v9.json");
+    const written = writeMachineAbortRecord(aggregatePath, {
+      reason: "qualification server exited mid-draw (server diagnostics: /x/y.log)",
+      serverLogPath: "/x/y.log",
+      candidateManifestHash: "a".repeat(64),
+      corpusDigest: "b".repeat(64),
+      custodyNumber: 2,
+      corpusVersion: "2026-08-27-release-v4",
+      reviewerRoutedFixtures: 64,
+      generatedAt: "2026-08-27T21:00:00.000Z",
+    });
+    const record = JSON.parse(readFileSync(written, "utf8")) as Record<string, unknown>;
+    // The v4 lesson: an outage must not be readable later as a classifier verdict.
+    expect(record.terminal).toBe("machine-release-aborted");
+    expect(record.custodyNumber).toBe(2);
+    expect(record.serverLogPath).toBe("/x/y.log");
+    expect(record).not.toHaveProperty("criticalFalseApprovals");
+    expect(record).not.toHaveProperty("terminalKindCounts");
+    // The aggregate path itself stays empty, so nothing scores an aborted run.
+    expect(existsSync(aggregatePath)).toBe(false);
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("an aborted draw writes the record before rethrowing", () => {
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    const guarded = source.slice(source.indexOf("results = await runBlindedDraw"), source.indexOf("const aggregate = scoreMachineRun"));
+    expect(guarded).toContain("error instanceof MachineDrawAbortedError");
+    expect(guarded).toContain("writeMachineAbortRecord");
+    expect(guarded).toContain("throw error");
+  });
+});
+
+describe("server boot", () => {
+  test("boot is retried, because the draw's server opens after custody is spent", () => {
+    expect(SERVER_BOOT_ATTEMPTS).toBeGreaterThan(1);
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    const boot = source.slice(source.indexOf("async function startQualificationServer"), source.indexOf("export async function probeProviderHealth"));
+    expect(boot).toContain("for (let attempt = 1; attempt <= SERVER_BOOT_ATTEMPTS");
+    // A retry that reused the port would inherit a half-bound predecessor's.
+    expect(boot).toContain("Bun.serve({ port: 0");
+    // A failed attempt must not leak its process into the next one. Matched
+    // together with the `continue`, because `dispose` also calls `stop` and
+    // would satisfy a bare substring check while the retry path leaked.
+    expect(boot).toContain("await stop(child);\n      continue;");
+    // Exhausting attempts is an infrastructure abort, and must name the log.
+    expect(boot).toContain("throw new MachineDrawAbortedError");
+  });
+
+  test("callers receive a server that is already answering", () => {
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    // Readiness is now proven inside the boot loop; a separate waitUntilReady
+    // could be skipped by a caller and was, before, the only readiness check.
+    expect(source).not.toContain("waitUntilReady");
+    expect(source).toContain("await startQualificationServer(");
   });
 });

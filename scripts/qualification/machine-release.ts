@@ -18,10 +18,10 @@
  */
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { archiveExistingArtifact } from "./artifact-archive";
-import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, statSync, symlinkSync, rmSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, statSync, symlinkSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createReviewerAgent, type ReviewerSessionClient } from "../../src/reviewer/agent";
 import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
@@ -104,6 +104,10 @@ const PROVIDER_PROBE_COMMAND = "echo smart-approve-provider-probe";
  * end an otherwise healthy draw.
  */
 export const CONSECUTIVE_SESSION_FAILURE_LIMIT = 3;
+
+export const SERVER_BOOT_ATTEMPTS = 3;
+/** Per-attempt budget; three attempts cost the wall-clock a single attempt used to. */
+export const SERVER_BOOT_TIMEOUT_MS = 20_000;
 
 /**
  * Advance the consecutive session-creation failure streak for one finished job.
@@ -246,8 +250,8 @@ function percentile(values: readonly number[], fraction: number): number {
   return Math.round(sorted[index]! * 1000) / 1000;
 }
 
-async function waitForServer(baseUrl: string, child: { exitCode: number | null }): Promise<void> {
-  const deadline = Date.now() + 60_000;
+async function waitForServer(baseUrl: string, child: { exitCode: number | null }, timeoutMs = 60_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error("qualification server exited during startup");
     try {
@@ -327,7 +331,6 @@ interface QualificationServer {
   readonly client: ReturnType<typeof createOpencodeClient>;
   /** Gitignored file holding the server's own stdout and stderr for this run. */
   readonly logPath: string;
-  readonly waitUntilReady: () => Promise<void>;
   /** Whether the server process has already exited, without awaiting it. */
   readonly exited: () => boolean;
   readonly dispose: () => Promise<void>;
@@ -344,11 +347,26 @@ interface QualificationServer {
  * way. A probe that stands up a different server than the draw proves nothing
  * about the draw, which is the failure mode this whole change exists to close.
  */
-function startQualificationServer(input: {
+/**
+ * Boot an isolated qualification server, returning it only once it answers.
+ *
+ * Booting is retried because a startup hang was observed once during this
+ * harness's own verification: the process stayed alive, never bound, and
+ * `waitForServer`'s `exitCode` check cannot see that case, so it burned the
+ * whole startup budget and failed. The draw's server is opened *after* custody
+ * is spent, so a single unlucky boot would cost the corpus. The probe's healthy
+ * boot proves nothing about the draw's server -- they are separate processes --
+ * which is exactly why the retry belongs here rather than in the probe.
+ *
+ * Each attempt reserves a fresh port: a half-bound predecessor may still hold
+ * the old one. The per-attempt budget is a third of the former single-attempt
+ * budget, so three attempts cost no more wall-clock than one used to.
+ */
+async function startQualificationServer(input: {
   readonly modelProfile: ModelProfile;
   readonly label: string;
   readonly authPath: string;
-}): QualificationServer {
+}): Promise<QualificationServer> {
   const runtimeRoot = mkdtempSync(join(tmpdir(), "smart-approve-machine-release-"));
   const configHome = join(runtimeRoot, "config");
   const dataHome = join(runtimeRoot, "data");
@@ -364,38 +382,57 @@ function startQualificationServer(input: {
   const logPath = join(SERVER_LOG_DIR, `machine-release-${input.label}-${basename(runtimeRoot)}.log`);
   const logFd = openSync(logPath, "a", 0o600);
 
-  const reservation = Bun.serve({ port: 0, fetch: () => new Response("reserved") });
-  const port = reservation.port;
-  reservation.stop(true);
-  if (!port) {
-    closeSync(logFd);
-    rmSync(runtimeRoot, { recursive: true, force: true });
-    throw new Error("could not reserve qualification port");
-  }
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const child = Bun.spawn([OPENCODE_BIN, "serve", "--pure", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: PROJECT_ROOT,
-    env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome, XDG_STATE_HOME: stateHome, OPENCODE_CONFIG_CONTENT: qualificationConfig(input.modelProfile) },
-    stdout: logFd,
-    stderr: logFd,
-  });
-
-  return {
-    baseUrl,
-    client: createOpencodeClient({ baseUrl, directory: PROJECT_ROOT }),
-    logPath,
-    waitUntilReady: () => waitForServer(baseUrl, child),
-    exited: () => child.exitCode !== null,
-    dispose: async () => {
-      child.kill("SIGTERM");
-      await Promise.race([child.exited, Bun.sleep(3_000)]).catch(() => undefined);
-      if (child.exitCode === null) child.kill("SIGKILL");
-      // Closed after the child is gone so nothing writes into a closed
-      // descriptor during shutdown.
-      closeSync(logFd);
-      rmSync(runtimeRoot, { recursive: true, force: true });
-    },
+  const stop = async (child: ReturnType<typeof Bun.spawn>): Promise<void> => {
+    child.kill("SIGTERM");
+    await Promise.race([child.exited, Bun.sleep(3_000)]).catch(() => undefined);
+    if (child.exitCode === null) child.kill("SIGKILL");
   };
+
+  const bootFailures: string[] = [];
+  for (let attempt = 1; attempt <= SERVER_BOOT_ATTEMPTS; attempt += 1) {
+    const reservation = Bun.serve({ port: 0, fetch: () => new Response("reserved") });
+    const port = reservation.port;
+    reservation.stop(true);
+    if (!port) {
+      bootFailures.push(`attempt ${attempt}: could not reserve a port`);
+      continue;
+    }
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const child = Bun.spawn([OPENCODE_BIN, "serve", "--pure", "--hostname", "127.0.0.1", "--port", String(port)], {
+      cwd: PROJECT_ROOT,
+      env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome, XDG_STATE_HOME: stateHome, OPENCODE_CONFIG_CONTENT: qualificationConfig(input.modelProfile) },
+      stdout: logFd,
+      stderr: logFd,
+    });
+
+    try {
+      await waitForServer(baseUrl, child, SERVER_BOOT_TIMEOUT_MS);
+    } catch (error) {
+      bootFailures.push(`attempt ${attempt}: ${error instanceof Error ? error.message : String(error)}`);
+      await stop(child);
+      continue;
+    }
+
+    return {
+      baseUrl,
+      client: createOpencodeClient({ baseUrl, directory: PROJECT_ROOT }),
+      logPath,
+      exited: () => child.exitCode !== null,
+      dispose: async () => {
+        await stop(child);
+        // Closed after the child is gone so nothing writes into a closed
+        // descriptor during shutdown.
+        closeSync(logFd);
+        rmSync(runtimeRoot, { recursive: true, force: true });
+      },
+    };
+  }
+
+  // The log lives outside the temp tree, so it survives this cleanup and is
+  // the only place a boot failure's cause is recorded.
+  closeSync(logFd);
+  rmSync(runtimeRoot, { recursive: true, force: true });
+  throw new MachineDrawAbortedError(`qualification server did not boot in ${SERVER_BOOT_ATTEMPTS} attempts (${bootFailures.join("; ")})`, logPath);
 }
 
 /**
@@ -420,9 +457,8 @@ export async function probeProviderHealth(input: {
 }): Promise<void> {
   const onStatus = input.onStatus ?? (() => undefined);
   const authPath = assertQualificationRuntime();
-  const server = startQualificationServer({ modelProfile: input.modelProfile, label: "probe", authPath });
+  const server = await startQualificationServer({ modelProfile: input.modelProfile, label: "probe", authPath });
   try {
-    await server.waitUntilReady();
     onStatus("probe: server is up");
 
     // Create directly, once, before going through the reviewer.
@@ -487,7 +523,7 @@ export async function runBlindedDraw(input: {
   // Repeating it keeps direct callers of `runBlindedDraw` honest.
   const authPath = assertQualificationRuntime();
 
-  const server = startQualificationServer({ modelProfile: input.modelProfile, label: "draw", authPath });
+  const server = await startQualificationServer({ modelProfile: input.modelProfile, label: "draw", authPath });
   const reviewer = createReviewerAgent({ client: server.client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: input.modelProfile.model, variant: input.modelProfile.requestedVariant });
 
   const jobs = input.blinded.flatMap((fixture) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({ fixture, repeat: index + 1 })));
@@ -497,7 +533,6 @@ export async function runBlindedDraw(input: {
   let aborted: MachineDrawAbortedError | undefined;
   let consecutiveSessionFailures = 0;
   try {
-    await server.waitUntilReady();
     let nextJob = 0;
     const worker = async (): Promise<void> => {
       while (true) {
@@ -569,6 +604,52 @@ export async function runBlindedDraw(input: {
  * only evidence the first will ever have produced (TASK-031). Extracted from
  * the draw so the archive step is reachable by a test without spending a draw.
  */
+/** Sibling of the aggregate path, so an abort cannot be mistaken for a scored run. */
+export function machineAbortRecordPath(aggregatePath: string): string {
+  const resolved = resolve(aggregatePath);
+  const extension = extname(resolved) || ".json";
+  return join(dirname(resolved), `${basename(resolved, extname(resolved))}-aborted${extension}`);
+}
+
+/**
+ * Record that a draw spent custody and produced no scoreable result.
+ *
+ * Deliberately a different file and a different `terminal` value from an
+ * aggregate: the failure this exists to prevent is an infrastructure outage
+ * being read later as a classifier verdict, which is exactly what the v4 draw's
+ * three "failures" were. Carries no fixture text -- `reason` is one of this
+ * module's own messages, never provider or command bytes.
+ */
+export function writeMachineAbortRecord(aggregatePath: string, input: {
+  readonly reason: string;
+  readonly serverLogPath: string;
+  readonly candidateManifestHash: string;
+  readonly corpusDigest: string;
+  readonly custodyNumber: number;
+  readonly corpusVersion: string;
+  readonly reviewerRoutedFixtures: number;
+  readonly generatedAt?: string;
+}): string {
+  const path = machineAbortRecordPath(aggregatePath);
+  archiveExistingArtifact(path);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const record = {
+    schemaVersion: 1,
+    terminal: "machine-release-aborted",
+    reason: input.reason,
+    serverLogPath: input.serverLogPath,
+    candidateManifestHash: input.candidateManifestHash,
+    corpusDigest: input.corpusDigest,
+    custodyNumber: input.custodyNumber,
+    corpusVersion: input.corpusVersion,
+    reviewerRoutedFixtures: input.reviewerRoutedFixtures,
+    generatedAt: input.generatedAt ?? new Date().toISOString(),
+    note: "Custody was spent and the draw aborted on an infrastructure failure. This is not a classifier result and must not be scored as one.",
+  };
+  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  return path;
+}
+
 export async function writeMachineReleaseAggregate(
   path: string,
   aggregate: unknown,
@@ -799,7 +880,30 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // fixtures are deterministic-manual by rubric and never call a provider.
   const blinded = blindFixtures(corpus.release);
   onStatus(`blinded ${blinded.length} fixtures; ${corpus.release.filter((fixture) => fixture.route === "reviewer").length} are reviewer-routed`);
-  const results = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile });
+  // An abort happens on the spent side of the ledger, so without this the
+  // corpus is consumed and the only durable trace is a ledger entry and a
+  // gitignored log -- the same shape of evidence loss as TASK-027. The record
+  // is not an aggregate and must never be read as one: it carries no scores,
+  // because a run that aborted has nothing to score.
+  let results: Awaited<ReturnType<typeof runBlindedDraw>>;
+  try {
+    results = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile });
+  } catch (error) {
+    if (error instanceof MachineDrawAbortedError) {
+      const recordPath = writeMachineAbortRecord(options.aggregatePath, {
+        reason: error.message,
+        serverLogPath: error.serverLogPath,
+        candidateManifestHash: candidate.manifestHash,
+        corpusDigest: digestCompanion,
+        custodyNumber: spent.consumptionNumber,
+        corpusVersion: corpus.corpusVersion,
+        reviewerRoutedFixtures: corpus.release.filter((fixture) => fixture.route === "reviewer").length,
+        generatedAt: options.generatedAt,
+      });
+      onStatus(`aborted: wrote ${recordPath}`);
+    }
+    throw error;
+  }
   const aggregate = scoreMachineRun({ corpus, results, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt });
   await writeMachineReleaseAggregate(options.aggregatePath, aggregate, onStatus);
   return aggregate;
