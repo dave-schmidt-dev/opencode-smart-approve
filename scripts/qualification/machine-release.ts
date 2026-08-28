@@ -890,17 +890,24 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
     results = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile });
   } catch (error) {
     if (error instanceof MachineDrawAbortedError) {
-      const recordPath = writeMachineAbortRecord(options.aggregatePath, {
-        reason: error.message,
-        serverLogPath: error.serverLogPath,
-        candidateManifestHash: candidate.manifestHash,
-        corpusDigest: digestCompanion,
-        custodyNumber: spent.consumptionNumber,
-        corpusVersion: corpus.corpusVersion,
-        reviewerRoutedFixtures: corpus.release.filter((fixture) => fixture.route === "reviewer").length,
-        generatedAt: options.generatedAt,
-      });
-      onStatus(`aborted: wrote ${recordPath}`);
+      // A failure to write the record must not replace the abort reason. The
+      // corpus is already spent at this point, so losing `error` would leave
+      // the run with neither a record nor an explanation.
+      try {
+        const recordPath = writeMachineAbortRecord(options.aggregatePath, {
+          reason: error.message,
+          serverLogPath: error.serverLogPath,
+          candidateManifestHash: candidate.manifestHash,
+          corpusDigest: digestCompanion,
+          custodyNumber: spent.consumptionNumber,
+          corpusVersion: corpus.corpusVersion,
+          reviewerRoutedFixtures: corpus.release.filter((fixture) => fixture.route === "reviewer").length,
+          generatedAt: options.generatedAt,
+        });
+        onStatus(`aborted: wrote ${recordPath}`);
+      } catch (writeError) {
+        onStatus(`aborted: could not write the abort record (${writeError instanceof Error ? writeError.message : String(writeError)}); server log is ${error.serverLogPath}`);
+      }
     }
     throw error;
   }

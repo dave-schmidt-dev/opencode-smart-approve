@@ -1232,6 +1232,28 @@ describe("aborted draws leave durable evidence", () => {
     expect(guarded).toContain("writeMachineAbortRecord");
     expect(guarded).toContain("throw error");
   });
+
+  test("a failed record write still surfaces the abort reason", () => {
+    // The guard is only worth having if the write can actually fail, so prove
+    // that first rather than asserting a catch around an infallible call.
+    const directory = mkdtempSync(join(tmpdir(), "smart-approve-abort-unwritable-"));
+    const blocker = join(directory, "blocker");
+    writeFileSync(blocker, "not a directory\n");
+    expect(() => writeMachineAbortRecord(join(blocker, "machine-release-aggregate.json"), {
+      reason: "server died", serverLogPath: "/x/y.log",
+      candidateManifestHash: "a".repeat(64), corpusDigest: "b".repeat(64),
+      custodyNumber: 2, corpusVersion: "2026-08-27-release-v4", reviewerRoutedFixtures: 64,
+    })).toThrow();
+    rmSync(directory, { recursive: true, force: true });
+
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    const guarded = source.slice(source.indexOf("results = await runBlindedDraw"), source.indexOf("const aggregate = scoreMachineRun"));
+    // Custody is already spent here: a write failure must not replace the
+    // reason the draw aborted with the reason the record could not be saved.
+    expect(guarded).toContain("catch (writeError)");
+    expect(guarded).not.toContain("throw writeError");
+    expect(guarded.indexOf("catch (writeError)")).toBeLessThan(guarded.indexOf("throw error"));
+  });
 });
 
 describe("server boot", () => {
