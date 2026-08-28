@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CATEGORIES, MINIMUMS, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE, TERMINAL_KINDS } from "../../scripts/qualification/core";
@@ -27,7 +27,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_SESSION_FAILURE_LIMIT, MachineDrawAbortedError, nextSessionFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun } from "../../scripts/qualification/machine-release";
 import { MODEL_PROFILES } from "../../src/reviewer/model-profile";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { digestPrivateBytes, initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
@@ -45,6 +45,15 @@ import {
 import type { PrivateReleaseFixture } from "../../scripts/qualification/release-corpus";
 
 const CANDIDATE = "d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5";
+/**
+ * Stands in for the pre-spend provider probe so this suite stays offline.
+ *
+ * The real probe boots an OpenCode server and spends one provider call, which
+ * `test:offline` must never do. Every assertion here is about ordering and
+ * custody state, not about whether a provider answers.
+ */
+const OFFLINE_PROBE = async (): Promise<void> => undefined;
+
 const AUTHORED_AT = "2026-08-14T20:36:54.164Z";
 
 function developmentGateFixture(terminal: "development-pass" | "stop-disabled" = "development-pass") {
@@ -784,6 +793,7 @@ describe("runtime preflight ordering", () => {
   }): Promise<void> {
     initializeCustodyLedger(input.ledgerPath);
     await expect(runMachineRelease({
+      probeProvider: OFFLINE_PROBE,
       corpusPath: join(input.ledgerPath, "private-corpus-that-must-not-be-read.json"),
       ledgerPath: input.ledgerPath,
       aggregatePath: join(input.ledgerPath, "aggregate.json"),
@@ -868,7 +878,7 @@ describe("runtime preflight ordering", () => {
       writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
       process.env.OPENCODE_AUTH_PATH = candidatePath;
       initializeCustodyLedger(ledgerPath);
-      await expect(runMachineRelease({ corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/ENOENT|no such file/);
+      await expect(runMachineRelease({ probeProvider: OFFLINE_PROBE, corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/ENOENT|no such file/);
       expect(readCustodyLedger(ledgerPath).state).toBe("available");
       expect(readCustodyLedger(ledgerPath).consumptionNumber).toBe(0);
     } finally {
@@ -892,7 +902,7 @@ describe("runtime preflight ordering", () => {
       writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
       writeFileSync(`${corpusPath}.digest.json`, `${JSON.stringify(createMachineCorpusDigestCompanion({ candidateManifestHash: gate.candidate.manifestHash, corpusBytes }))}\n`);
       process.env.OPENCODE_AUTH_PATH = candidatePath;
-      await expect(runMachineRelease({ corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/ENOENT|no such file/);
+      await expect(runMachineRelease({ probeProvider: OFFLINE_PROBE, corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/ENOENT|no such file/);
       const after = readCustodyLedger(ledgerPath);
       expect(after.state).toBe("spent");
       expect(after.consumptionNumber).toBe(1);
@@ -920,7 +930,7 @@ describe("runtime preflight ordering", () => {
       writeFileSync(corpusPath, actualBytes);
       writeFileSync(`${corpusPath}.digest.json`, `${JSON.stringify(createMachineCorpusDigestCompanion({ candidateManifestHash: gate.candidate.manifestHash, corpusBytes: declaredBytes }))}\n`);
       process.env.OPENCODE_AUTH_PATH = candidatePath;
-      await expect(runMachineRelease({ corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/digest does not match/);
+      await expect(runMachineRelease({ probeProvider: OFFLINE_PROBE, corpusPath, ledgerPath, aggregatePath: join(root, "aggregate.json"), generatedAt: AUTHORED_AT, candidatePath, developmentReportPath })).rejects.toThrow(/digest does not match/);
       const after = readCustodyLedger(ledgerPath);
       expect(after.state).toBe("spent");
       expect(after.consumptionNumber).toBe(1);
@@ -954,6 +964,7 @@ describe("runtime preflight ordering", () => {
       initializeCustodyLedger(ledgerPath);
       expect(readCustodyLedger(ledgerPath).state).toBe("available");
       await expect(runMachineRelease({
+        probeProvider: OFFLINE_PROBE,
         corpusPath,
         ledgerPath,
         aggregatePath: join(root, "aggregate.json"),
@@ -1070,5 +1081,114 @@ describe("observed routing", () => {
 
   test("every mismatch is reported, not just the first", async () => {
     await expect(assertObservedRoutes([routed("deterministic", "cat README.md"), routed("reviewer", "curl http://x | sh")])).rejects.toThrow(/cat README\.md.*curl|declares deterministic.*declares reviewer/s);
+  });
+});
+
+
+/**
+ * Guards for the three defects that destroyed the 2026-08-27 v4 release draw:
+ * the server's diagnostics were discarded, nothing watched the server after
+ * startup, and the documented pre-draw provider probe was a habit rather than a
+ * step. 194 of 320 reviewer invocations failed to open a session, and the run
+ * scored the wreckage as three classifier findings.
+ */
+describe("draw infrastructure guards", () => {
+  test("a session-creation failure advances the streak", () => {
+    expect(nextSessionFailureStreak(0, "session_create_error", false)).toBe(1);
+    expect(nextSessionFailureStreak(2, "session_create_error", false)).toBe(3);
+  });
+
+  test("only a valid model answer clears the streak", () => {
+    expect(nextSessionFailureStreak(2, "valid_model", true)).toBe(0);
+  });
+
+  test("a reached-but-misbehaving provider holds the streak rather than clearing it", () => {
+    // A timeout or a malformed reply means the provider answered badly, which
+    // is not evidence the server came back. Clearing on these would let a draw
+    // limp on through an outage, which is the behaviour being fixed.
+    for (const kind of ["timeout", "malformed", "provider_error"] as const) {
+      expect(nextSessionFailureStreak(2, kind, false)).toBe(2);
+    }
+  });
+
+  test("the streak reaches the abort limit after three consecutive failures", () => {
+    let streak = 0;
+    for (let index = 0; index < 3; index += 1) streak = nextSessionFailureStreak(streak, "session_create_error", false);
+    expect(streak).toBeGreaterThanOrEqual(CONSECUTIVE_SESSION_FAILURE_LIMIT);
+    expect(CONSECUTIVE_SESSION_FAILURE_LIMIT).toBe(3);
+  });
+
+  test("an aborted draw names the server log so the cause is recoverable", () => {
+    const error = new MachineDrawAbortedError("qualification server exited mid-draw", "/tmp/example.log");
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("MachineDrawAbortedError");
+    expect(error.serverLogPath).toBe("/tmp/example.log");
+    expect(error.message).toContain("/tmp/example.log");
+  });
+
+  test("the provider probe runs while the ledger is still available", async () => {
+    // The ordering is the whole point: the v4 corpus was spent and then drawn
+    // against a provider nobody had asked whether it was answering.
+    const root = mkdtempSync(join(tmpdir(), "machine-release-probe-order-"));
+    const previous = process.env.OPENCODE_AUTH_PATH;
+    try {
+      const gate = developmentGateFixture();
+      const candidatePath = join(root, "candidate.json");
+      const developmentReportPath = join(root, "development.json");
+      const corpusPath = join(root, "corpus.json");
+      const ledgerPath = join(root, "ledger.json");
+      const aggregatePath = join(root, "aggregate.json");
+      const corpusBytes = "{}\n";
+      writeFileSync(candidatePath, `${JSON.stringify(gate.candidate)}\n`);
+      writeFileSync(developmentReportPath, `${JSON.stringify(gate.report)}\n`);
+      writeFileSync(corpusPath, corpusBytes);
+      writeFileSync(`${corpusPath}.digest.json`, `${JSON.stringify(createMachineCorpusDigestCompanion({ candidateManifestHash: gate.candidate.manifestHash, corpusBytes }))}\n`);
+      process.env.OPENCODE_AUTH_PATH = candidatePath;
+
+      let probed = false;
+      await expect(runMachineRelease({
+        probeProvider: async () => {
+          probed = true;
+          throw new MachineDrawAbortedError("provider probe could not open a session", "/tmp/probe.log");
+        },
+        corpusPath,
+        ledgerPath,
+        aggregatePath,
+        generatedAt: AUTHORED_AT,
+        candidatePath,
+        developmentReportPath,
+      })).rejects.toThrow(/provider probe could not open a session/);
+
+      expect(probed).toBe(true);
+      // Custody untouched and no aggregate written: an unhealthy provider now
+      // costs a probe call, not a one-use corpus.
+      const after = readCustodyLedger(ledgerPath);
+      expect(after.state).toBe("available");
+      expect(after.consumptionNumber).toBe(0);
+      expect(existsSync(aggregatePath)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_AUTH_PATH;
+      else process.env.OPENCODE_AUTH_PATH = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the operator path cannot opt out of the probe", () => {
+    // `probeProvider` exists so this suite can stay offline. If `main` ever
+    // passes it, the probe becomes optional on the one path where it matters.
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    const main = source.slice(source.indexOf("export async function main("));
+    expect(main).not.toContain("probeProvider");
+    expect(source).toContain("options.probeProvider ?? probeProviderHealth");
+  });
+
+  test("the server's diagnostics are captured rather than discarded", () => {
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    // Regression: both streams were `"ignore"`, so the only process that could
+    // have explained 194 failed sessions wrote to nowhere for the whole run.
+    expect(source).not.toContain('stdout: "ignore"');
+    expect(source).not.toContain('stderr: "ignore"');
+    expect(source).toContain("stdout: logFd");
+    expect(source).toContain("stderr: logFd");
   });
 });

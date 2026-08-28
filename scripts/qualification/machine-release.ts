@@ -18,10 +18,10 @@
  */
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { archiveExistingArtifact } from "./artifact-archive";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, rmSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, statSync, symlinkSync, rmSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createReviewerAgent, type ReviewerSessionClient } from "../../src/reviewer/agent";
 import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
@@ -65,6 +65,76 @@ import { generateKeyPairSync } from "node:crypto";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const OPENCODE_BIN = resolve(PROJECT_ROOT, "node_modules/.bin/opencode");
+
+/**
+ * Where the qualification server's own stdout and stderr land.
+ *
+ * The server was spawned with both streams set to `"ignore"`. When the
+ * 2026-08-27 v4 release draw lost 194 of its 320 reviewer invocations to failed
+ * session creation, the one process that could have said why had been writing
+ * to nowhere for the entire run, so the aggregate recorded the loss and nothing
+ * recorded the cause. `.logs/` is gitignored, and a log costs nothing next to
+ * re-running a draw blind.
+ */
+const SERVER_LOG_DIR = join(PROJECT_ROOT, ".logs");
+
+/**
+ * A command used only to prove the provider answers before custody is spent.
+ *
+ * Deliberately synthetic and hardcoded: it is not read from the corpus, so
+ * running it cannot move private input across the spend boundary. It routes to
+ * `model_review` like every other command -- the deterministic policy has no
+ * allow state -- which is what makes it a provider probe rather than a policy
+ * check.
+ */
+const PROVIDER_PROBE_COMMAND = "echo smart-approve-provider-probe";
+
+/**
+ * How many consecutive reviewer-routed jobs may fail to create a session before
+ * the draw stops.
+ *
+ * Set low on purpose. Once the server is unreachable every remaining job
+ * becomes an invalid run, and the scorer cannot tell that sample apart from a
+ * classifier answering badly: the v4 aggregate reported `machine-release-fail`
+ * with three named failures, all of which were artifacts of the loss rather
+ * than findings about the classifier. Aborting cannot un-spend custody -- the
+ * ledger is spent before the corpus is opened, by design -- but it stops a run
+ * from manufacturing a verdict out of an outage, and it returns the unspent
+ * provider budget. Three rather than one so a single transient blip does not
+ * end an otherwise healthy draw.
+ */
+export const CONSECUTIVE_SESSION_FAILURE_LIMIT = 3;
+
+/**
+ * Advance the consecutive session-creation failure streak for one finished job.
+ *
+ * Pulled out of the worker so the rule is testable without a provider, because
+ * the rule has a subtlety worth pinning: only a `valid_model` answer clears the
+ * streak. A timeout or a malformed reply leaves it where it is -- those say the
+ * provider was reached and misbehaved, which is not evidence the server
+ * recovered -- and a deterministic job never reaches here at all, so benign
+ * commands interleaving between failures cannot mask a dead server.
+ */
+export function nextSessionFailureStreak(current: number, terminalKind: TerminalKind, valid: boolean): number {
+  if (terminalKind === "session_create_error") return current + 1;
+  return valid ? 0 : current;
+}
+
+/**
+ * Raised when a run stops because its environment failed, not because the
+ * classifier answered badly.
+ *
+ * A distinct type because the difference is the whole point: a scoring failure
+ * is evidence about the classifier and an aborted run is evidence about the
+ * infrastructure, and the v4 draw is what happens when one is filed as the
+ * other.
+ */
+export class MachineDrawAbortedError extends Error {
+  constructor(message: string, readonly serverLogPath: string) {
+    super(`${message} (server diagnostics: ${serverLogPath})`);
+    this.name = "MachineDrawAbortedError";
+  }
+}
 
 function qualificationConfig(profile: ModelProfile): string {
   return JSON.stringify({ model: profile.model, agent: { "smart-approve-reviewer": {
@@ -251,6 +321,157 @@ export function normalizeMachineTerminalKind(input: {
   return kind === "provider_error" && !input.providerAttempted ? "session_create_error" : kind;
 }
 
+/** A booted, isolated qualification server plus the handles to observe and stop it. */
+interface QualificationServer {
+  readonly baseUrl: string;
+  readonly client: ReturnType<typeof createOpencodeClient>;
+  /** Gitignored file holding the server's own stdout and stderr for this run. */
+  readonly logPath: string;
+  readonly waitUntilReady: () => Promise<void>;
+  /** Whether the server process has already exited, without awaiting it. */
+  readonly exited: () => boolean;
+  readonly dispose: () => Promise<void>;
+}
+
+/**
+ * Boot a pinned, isolated OpenCode server for one qualification run.
+ *
+ * `--pure` and a private XDG root keep the run off the operator's real
+ * configuration, and the auth file is symlinked rather than copied so no
+ * credential bytes are written into the temporary tree.
+ *
+ * Extracted from the draw so the probe and the draw boot the server the same
+ * way. A probe that stands up a different server than the draw proves nothing
+ * about the draw, which is the failure mode this whole change exists to close.
+ */
+function startQualificationServer(input: {
+  readonly modelProfile: ModelProfile;
+  readonly label: string;
+  readonly authPath: string;
+}): QualificationServer {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "smart-approve-machine-release-"));
+  const configHome = join(runtimeRoot, "config");
+  const dataHome = join(runtimeRoot, "data");
+  const cacheHome = join(runtimeRoot, "cache");
+  const stateHome = join(runtimeRoot, "state");
+  for (const directory of [configHome, cacheHome, stateHome, join(dataHome, "opencode")]) mkdirSync(directory, { recursive: true });
+  symlinkSync(resolve(input.authPath), join(dataHome, "opencode", "auth.json"));
+
+  // Named from the temp root, which `mkdtempSync` already made unique, so
+  // concurrent runs cannot interleave into one log and the log outlives the
+  // temp tree it is named for.
+  mkdirSync(SERVER_LOG_DIR, { recursive: true, mode: 0o700 });
+  const logPath = join(SERVER_LOG_DIR, `machine-release-${input.label}-${basename(runtimeRoot)}.log`);
+  const logFd = openSync(logPath, "a", 0o600);
+
+  const reservation = Bun.serve({ port: 0, fetch: () => new Response("reserved") });
+  const port = reservation.port;
+  reservation.stop(true);
+  if (!port) {
+    closeSync(logFd);
+    rmSync(runtimeRoot, { recursive: true, force: true });
+    throw new Error("could not reserve qualification port");
+  }
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = Bun.spawn([OPENCODE_BIN, "serve", "--pure", "--hostname", "127.0.0.1", "--port", String(port)], {
+    cwd: PROJECT_ROOT,
+    env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome, XDG_STATE_HOME: stateHome, OPENCODE_CONFIG_CONTENT: qualificationConfig(input.modelProfile) },
+    stdout: logFd,
+    stderr: logFd,
+  });
+
+  return {
+    baseUrl,
+    client: createOpencodeClient({ baseUrl, directory: PROJECT_ROOT }),
+    logPath,
+    waitUntilReady: () => waitForServer(baseUrl, child),
+    exited: () => child.exitCode !== null,
+    dispose: async () => {
+      child.kill("SIGTERM");
+      await Promise.race([child.exited, Bun.sleep(3_000)]).catch(() => undefined);
+      if (child.exitCode === null) child.kill("SIGKILL");
+      // Closed after the child is gone so nothing writes into a closed
+      // descriptor during shutdown.
+      closeSync(logFd);
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+/**
+ * Prove the provider answers before any custody is spent.
+ *
+ * The 2026-08-16 MiMo comparison and the 2026-08-27 v4 release draw died the
+ * same way -- 159 and 194 failed session creations respectively -- and between
+ * them the remedy was a habit rather than a step: the development draw was
+ * probed by hand and the release draw was not, which is what cost the v4
+ * corpus. This makes the probe part of the run.
+ *
+ * It reads no fixture and sends only a hardcoded synthetic command, so it is
+ * safe on the `available` side of the spend. Its limits are worth stating: one
+ * round trip catches a server that will not boot, absent or unreadable auth,
+ * and a selector the account cannot dispatch. It cannot catch degradation that
+ * only appears under load, which is what the mid-draw abort is for. The two
+ * guards cover different failures and neither replaces the other.
+ */
+export async function probeProviderHealth(input: {
+  readonly modelProfile: ModelProfile;
+  readonly onStatus?: (message: string) => void;
+}): Promise<void> {
+  const onStatus = input.onStatus ?? (() => undefined);
+  const authPath = assertQualificationRuntime();
+  const server = startQualificationServer({ modelProfile: input.modelProfile, label: "probe", authPath });
+  try {
+    await server.waitUntilReady();
+    onStatus("probe: server is up");
+
+    // Create directly, once, before going through the reviewer.
+    // `createReviewerAgent` deliberately never echoes provider error text --
+    // it may carry command or secret bytes -- so a creation failure inside the
+    // agent surfaces as a bare `provider_error` with the reason discarded, and
+    // that is precisely why the v4 draw could report 194 failures and no cause.
+    // Here no fixture has been read and no command has been sent, so the raw
+    // error carries nothing private and is safe to surface.
+    let probeSessionID = "";
+    try {
+      const created = await server.client.session.create({ body: { title: "smart-approve:probe" }, query: { directory: PROJECT_ROOT } });
+      const payload = (created as { data?: { id?: unknown }; id?: unknown } | undefined);
+      const id = payload?.data?.id ?? payload?.id;
+      if (typeof id !== "string" || id.length === 0) throw new Error("session creation returned no session ID");
+      probeSessionID = id;
+    } catch (error) {
+      throw new MachineDrawAbortedError(`provider probe could not open a session: ${error instanceof Error ? error.message : String(error)}`, server.logPath);
+    }
+    await server.client.session.delete({ path: { id: probeSessionID }, query: { directory: PROJECT_ROOT } }).catch(() => undefined);
+    onStatus("probe: session creation works");
+
+    // Then one full round trip through the same agent the draw uses, because a
+    // session that opens says nothing about whether the selector dispatches.
+    const reviewer = createReviewerAgent({ client: server.client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: input.modelProfile.model, variant: input.modelProfile.requestedVariant });
+    try {
+      const deterministic = await evaluateDeterministicPolicy(PROVIDER_PROBE_COMMAND, { pathIdentity: { cwd: PROJECT_ROOT, ownedRoot: PROJECT_ROOT } });
+      if (deterministic.status !== "model_review") throw new MachineDrawAbortedError(`provider probe command no longer routes to the reviewer (${deterministic.status})`, server.logPath);
+      const pathClasses = deterministic.pathClasses ?? ["unknown"];
+      const result = await reviewer.review({
+        requestID: "machine:provider-probe:1",
+        prompt: PROVIDER_PROBE_COMMAND,
+        redactedCommand: PROVIDER_PROBE_COMMAND,
+        parserFeatures: deterministic.parse?.features ? { ...deterministic.parse.features } : undefined,
+        policyFacts: ["model_review", "parser.clear", "privacy.clear", ...pathClasses.map((value) => `path.${value}`)],
+        pathClasses,
+      });
+      const providerAttempted = result.outcome?.providerAttempted ?? result.sessionID.length > 0;
+      const terminalKind = normalizeMachineTerminalKind({ outcomeKind: result.outcome?.kind, providerAttempted, sessionID: result.sessionID });
+      if (terminalKind !== "valid_model") throw new MachineDrawAbortedError(`provider probe returned ${terminalKind} instead of a model answer`, server.logPath);
+      onStatus("probe: provider answered; proceeding to spend custody");
+    } finally {
+      await reviewer.dispose().catch(() => undefined);
+    }
+  } finally {
+    await server.dispose();
+  }
+}
+
 /**
  * Run every blinded fixture `REPEAT_COUNT` times against the pinned reviewer.
  *
@@ -266,37 +487,28 @@ export async function runBlindedDraw(input: {
   // Repeating it keeps direct callers of `runBlindedDraw` honest.
   const authPath = assertQualificationRuntime();
 
-  const runtimeRoot = mkdtempSync(join(tmpdir(), "smart-approve-machine-release-"));
-  const configHome = join(runtimeRoot, "config");
-  const dataHome = join(runtimeRoot, "data");
-  const cacheHome = join(runtimeRoot, "cache");
-  const stateHome = join(runtimeRoot, "state");
-  for (const directory of [configHome, cacheHome, stateHome, join(dataHome, "opencode")]) mkdirSync(directory, { recursive: true });
-  symlinkSync(resolve(authPath), join(dataHome, "opencode", "auth.json"));
-
-  const reservation = Bun.serve({ port: 0, fetch: () => new Response("reserved") });
-  const port = reservation.port;
-  reservation.stop(true);
-  if (!port) throw new Error("could not reserve qualification port");
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const child = Bun.spawn([OPENCODE_BIN, "serve", "--pure", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: PROJECT_ROOT,
-    env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome, XDG_STATE_HOME: stateHome, OPENCODE_CONFIG_CONTENT: qualificationConfig(input.modelProfile) },
-    stdout: "ignore",
-    stderr: "ignore",
-  });
-  const client = createOpencodeClient({ baseUrl, directory: PROJECT_ROOT });
-  const reviewer = createReviewerAgent({ client: client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: input.modelProfile.model, variant: input.modelProfile.requestedVariant });
+  const server = startQualificationServer({ modelProfile: input.modelProfile, label: "draw", authPath });
+  const reviewer = createReviewerAgent({ client: server.client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: input.modelProfile.model, variant: input.modelProfile.requestedVariant });
 
   const jobs = input.blinded.flatMap((fixture) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({ fixture, repeat: index + 1 })));
   const results = new Array<{ fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }>(jobs.length);
   let completed = 0;
   const progress = setInterval(() => input.onStatus(`machine release ${completed}/${jobs.length} invocations complete`), 8_000);
+  let aborted: MachineDrawAbortedError | undefined;
+  let consecutiveSessionFailures = 0;
   try {
-    await waitForServer(baseUrl, child);
+    await server.waitUntilReady();
     let nextJob = 0;
     const worker = async (): Promise<void> => {
       while (true) {
+        // Both guards are checked before claiming a job, so a draw that has
+        // already lost its server stops handing out work instead of converting
+        // every remaining fixture into an invalid run.
+        if (aborted) return;
+        if (server.exited()) {
+          aborted ??= new MachineDrawAbortedError("qualification server exited mid-draw", server.logPath);
+          return;
+        }
         const jobIndex = nextJob;
         nextJob += 1;
         const job = jobs[jobIndex];
@@ -323,20 +535,28 @@ export async function runBlindedDraw(input: {
           decision = result.decision;
           terminalKind = normalizeMachineTerminalKind({ outcomeKind: result.outcome?.kind, providerAttempted, sessionID: result.sessionID });
           valid = terminalKind === "valid_model";
+          // Counted only on reviewer-routed jobs: a deterministic job never
+          // touches the provider, so letting one reset the streak would mask a
+          // dead server behind whatever benign commands happened to interleave.
+          consecutiveSessionFailures = nextSessionFailureStreak(consecutiveSessionFailures, terminalKind, valid);
+          if (consecutiveSessionFailures >= CONSECUTIVE_SESSION_FAILURE_LIMIT) {
+            aborted ??= new MachineDrawAbortedError(`${consecutiveSessionFailures} consecutive reviewer sessions failed to open`, server.logPath);
+          }
         }
         results[jobIndex] = { fixtureID: job.fixture.id, repeat: job.repeat, decision, route, providerAttempted, terminalKind, valid, latencyMs: performance.now() - started };
         completed += 1;
       }
     };
     await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_REVIEWERS, jobs.length) }, () => worker()));
+    // Thrown rather than returned: a partial result array scored as a draw is
+    // exactly the v4 failure, where an outage was written up as three
+    // classifier findings.
+    if (aborted) throw aborted;
     return results;
   } finally {
     clearInterval(progress);
     await reviewer.dispose().catch(() => undefined);
-    child.kill("SIGTERM");
-    await Promise.race([child.exited, Bun.sleep(3_000)]).catch(() => undefined);
-    if (child.exitCode === null) child.kill("SIGKILL");
-    rmSync(runtimeRoot, { recursive: true, force: true });
+    await server.dispose();
   }
 }
 
@@ -473,6 +693,13 @@ export function scoreMachineRun(input: {
 
 export interface MachineReleaseOptions {
   readonly corpusPath: string;
+  /**
+   * Provider health check, defaulting to the real one. Injected only so the
+   * offline suite can assert the *ordering* -- that the probe runs while the
+   * ledger is still `available` -- without booting a server or calling a
+   * provider. `main` never passes it, so the operator path cannot opt out.
+   */
+  readonly probeProvider?: (input: { readonly modelProfile: ModelProfile; readonly onStatus: (message: string) => void }) => Promise<void>;
   readonly ledgerPath: string;
   readonly aggregatePath: string;
   readonly generatedAt: string;
@@ -535,6 +762,14 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const consumptionNumber = current.state === "reserved" ? current.consumptionNumber : current.consumptionNumber + 1;
   const commitment: SignedConsumptionCommitment = createSignedConsumptionCommitment({ corpusDigest: digestCompanion, consumptionNumber, privateKey, publicKey });
   mkdirSync(dirname(resolve(options.aggregatePath)), { recursive: true, mode: 0o700 });
+
+  // Last check on the `available` side of the ledger. Everything above is path
+  // and manifest validation that costs nothing; this one costs a single
+  // provider call and is worth it, because the alternative is what happened to
+  // the v4 corpus -- spent, drawn, and lost to a provider that was never asked
+  // whether it was answering.
+  onStatus("probe: checking provider health before spending custody");
+  await (options.probeProvider ?? probeProviderHealth)({ modelProfile: candidate.candidate.modelProfile, onStatus });
 
   // Spend first, then open. An interrupted run leaves the ledger spent, so the
   // same corpus cannot be quietly re-consumed to fish for a better draw.
