@@ -249,6 +249,24 @@ describe("quoted evidence in committed documents", () => {
     }
   });
 
+  test("a document naming a rehearsal artifact fails, and naming the suite does not", () => {
+    // A rehearsal's decisions were chosen by a test. Citing one in a committed
+    // document is the only route by which a stubbed run could be read later as
+    // a draw, which is the confusion that cost three v4 consumptions in kind.
+    const named = evidenceRoot({ spec: "See eval-results/machine-release-rehearsal-aggregate.json for the result.\n" });
+    try {
+      expect(validateQuotedEvidence(named, current).join(" ")).toContain("machine-release-rehearsal-aggregate.json");
+    } finally {
+      rmSync(named, { recursive: true, force: true });
+    }
+    const suite = evidenceRoot({ spec: "Run tests/eval/machine-release-rehearsal.test.ts before any draw.\n" });
+    try {
+      expect(validateQuotedEvidence(suite, current)).toEqual([]);
+    } finally {
+      rmSync(suite, { recursive: true, force: true });
+    }
+  });
+
   test("a hash naming a manifest that validates is accepted", () => {
     const root = evidenceRoot({ spec: `The current freeze is ${CURRENT_HASH}.\n` });
     try {

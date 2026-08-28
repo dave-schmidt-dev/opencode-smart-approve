@@ -27,7 +27,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_SESSION_FAILURE_LIMIT, describeTransportFault, instrumentTransport, machineAbortRecordPath, MachineDrawAbortedError, nextSessionFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun, SERVER_BOOT_ATTEMPTS, summarizeTransportFaults, writeMachineAbortRecord } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_TRANSPORT_FAILURE_LIMIT, describeTransportFault, instrumentTransport, machineAbortRecordPath, MachineDrawAbortedError, nextTransportFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun, SERVER_BOOT_ATTEMPTS, summarizeTransportFaults, writeMachineAbortRecord } from "../../scripts/qualification/machine-release";
 import { MODEL_PROFILES } from "../../src/reviewer/model-profile";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { digestPrivateBytes, initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
@@ -1093,29 +1093,34 @@ describe("observed routing", () => {
  * scored the wreckage as three classifier findings.
  */
 describe("draw infrastructure guards", () => {
-  test("a session-creation failure advances the streak", () => {
-    expect(nextSessionFailureStreak(0, "session_create_error", false)).toBe(1);
-    expect(nextSessionFailureStreak(2, "session_create_error", false)).toBe(3);
+  test("either transport failure kind advances the streak", () => {
+    // Both, not just creation. Which of the two an outage is labeled depends on
+    // whether the transport throws synchronously or rejects, so counting only
+    // one lets a total outage run to completion and be scored.
+    expect(nextTransportFailureStreak(0, "session_create_error", false)).toBe(1);
+    expect(nextTransportFailureStreak(2, "session_create_error", false)).toBe(3);
+    expect(nextTransportFailureStreak(0, "provider_error", false)).toBe(1);
+    expect(nextTransportFailureStreak(2, "provider_error", false)).toBe(3);
   });
 
   test("only a valid model answer clears the streak", () => {
-    expect(nextSessionFailureStreak(2, "valid_model", true)).toBe(0);
+    expect(nextTransportFailureStreak(2, "valid_model", true)).toBe(0);
   });
 
   test("a reached-but-misbehaving provider holds the streak rather than clearing it", () => {
-    // A timeout or a malformed reply means the provider answered badly, which
-    // is not evidence the server came back. Clearing on these would let a draw
-    // limp on through an outage, which is the behaviour being fixed.
-    for (const kind of ["timeout", "malformed", "provider_error"] as const) {
-      expect(nextSessionFailureStreak(2, kind, false)).toBe(2);
+    // A timeout or a malformed reply means the model answered badly, which is
+    // evidence about the classifier and must not abort the draw. It is also not
+    // evidence the transport recovered, so the streak holds rather than clears.
+    for (const kind of ["timeout", "malformed", "truncated", "empty"] as const) {
+      expect(nextTransportFailureStreak(2, kind, false)).toBe(2);
     }
   });
 
   test("the streak reaches the abort limit after three consecutive failures", () => {
     let streak = 0;
-    for (let index = 0; index < 3; index += 1) streak = nextSessionFailureStreak(streak, "session_create_error", false);
-    expect(streak).toBeGreaterThanOrEqual(CONSECUTIVE_SESSION_FAILURE_LIMIT);
-    expect(CONSECUTIVE_SESSION_FAILURE_LIMIT).toBe(3);
+    for (let index = 0; index < 3; index += 1) streak = nextTransportFailureStreak(streak, "session_create_error", false);
+    expect(streak).toBeGreaterThanOrEqual(CONSECUTIVE_TRANSPORT_FAILURE_LIMIT);
+    expect(CONSECUTIVE_TRANSPORT_FAILURE_LIMIT).toBe(3);
   });
 
   test("an aborted draw names the server log so the cause is recoverable", () => {

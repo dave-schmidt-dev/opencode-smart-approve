@@ -15,7 +15,7 @@ This release map is separate from the local-only task queue and history.
 | TASK-009 | REQ-012 | tests/package/package.test.ts; tests/spec/traceability.test.ts; tests/e2e/opencode-1.18.10.test.ts |
 | TASK-010 | REQ-013 | tests/spec/traceability.test.ts |
 | TASK-011 | REQ-014 | tests/unit/config.test.ts; tests/unit/shell-policy.test.ts; tests/unit/replan-guidance.test.ts; tests/integration/replan-guard.test.ts; tests/integration/fail-closed-to-auto.test.ts; tests/integration/progress.test.ts; tests/security/audit-redaction.test.ts; tests/e2e/opencode-contract-canary.test.ts; tests/e2e/opencode-1.18.10.test.ts |
-| TASK-025 | REQ-011 | tests/eval/machine-release.test.ts |
+| TASK-025 | REQ-011 | tests/eval/machine-release.test.ts; tests/eval/machine-release-rehearsal.test.ts |
 
 ## REQ-011 selector evidence
 
@@ -63,6 +63,12 @@ missing, stale, and `stop-disabled` reports before custody, plus strict named
 flag parsing for candidate and development-report paths. The same suites cover
 the public raw-byte digest companion, pre-spend sidecar rejection, post-spend
 missing-corpus handling, and spent-custody digest mismatch handling.
+`tests/eval/machine-release-rehearsal.test.ts` runs that whole path end to end
+against a scripted session client, which is the only seam a live model call sits
+behind: a clean pass, a seeded critical false approval, unparseable answers as
+invalid runs, a session-creation cascade, a transport that dies mid-draw, and a
+probe failure that leaves custody unspent. Its artifacts carry a rehearsal schema
+and `executionMode: "rehearsal"`, and are evidence about the harness only.
 The release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`; it is `release-disabled` on
 classifier evidence, not on authorship — the 2026-08-14 owner decision under

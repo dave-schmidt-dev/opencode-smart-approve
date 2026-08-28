@@ -103,24 +103,33 @@ const PROVIDER_PROBE_COMMAND = "echo smart-approve-provider-probe";
  * provider budget. Three rather than one so a single transient blip does not
  * end an otherwise healthy draw.
  */
-export const CONSECUTIVE_SESSION_FAILURE_LIMIT = 3;
+export const CONSECUTIVE_TRANSPORT_FAILURE_LIMIT = 3;
 
 export const SERVER_BOOT_ATTEMPTS = 3;
 /** Per-attempt budget; three attempts cost the wall-clock a single attempt used to. */
 export const SERVER_BOOT_TIMEOUT_MS = 20_000;
 
 /**
- * Advance the consecutive session-creation failure streak for one finished job.
+ * Advance the consecutive transport-failure streak for one finished job.
  *
- * Pulled out of the worker so the rule is testable without a provider, because
- * the rule has a subtlety worth pinning: only a `valid_model` answer clears the
- * streak. A timeout or a malformed reply leaves it where it is -- those say the
- * provider was reached and misbehaved, which is not evidence the server
- * recovered -- and a deterministic job never reaches here at all, so benign
- * commands interleaving between failures cannot mask a dead server.
+ * Two kinds count. `session_create_error` means the session never opened.
+ * `provider_error` means the call itself failed -- and it is counted here for a
+ * reason found by rehearsing the draw offline: the reviewer sets
+ * `providerAttempted` after `session.prompt` is invoked, so which of the two
+ * labels an outage receives depends on whether the transport throws
+ * synchronously or rejects. Counting only creation failures therefore let a
+ * total provider outage run to completion and be *scored*, producing a
+ * `machine-release-fail` whose failures were all invalid runs. That is the v4
+ * shape exactly: an outage written up as a classifier verdict.
+ *
+ * Everything else leaves the streak where it is. A timeout or a malformed reply
+ * says the provider was reached and misbehaved, which is evidence about the
+ * classifier and must not abort the draw; only a `valid_model` answer clears
+ * the streak. A deterministic job never reaches here at all, so benign commands
+ * interleaving between failures cannot mask a dead transport.
  */
-export function nextSessionFailureStreak(current: number, terminalKind: TerminalKind, valid: boolean): number {
-  if (terminalKind === "session_create_error") return current + 1;
+export function nextTransportFailureStreak(current: number, terminalKind: TerminalKind, valid: boolean): number {
+  if (terminalKind === "session_create_error" || terminalKind === "provider_error") return current + 1;
   return valid ? 0 : current;
 }
 
@@ -277,8 +286,28 @@ export interface MachineObservation {
   readonly latencyMs: number;
 }
 
+/**
+ * Schema names for a scored run.
+ *
+ * A rehearsal carries a different schema, a different `executionMode`, and a
+ * different filename prefix (`assertAggregateDestination`). Three independent
+ * markers rather than one, because the thing being prevented is a stubbed run
+ * being read later as evidence about the classifier -- the same confusion the
+ * abort record exists to prevent for an outage.
+ */
+export const MACHINE_AGGREGATE_SCHEMA = "classifier-eval/machine-release-aggregate/v2";
+export const MACHINE_REHEARSAL_SCHEMA = "classifier-eval/machine-release-rehearsal/v1";
+
+/**
+ * `live` means every model call in the run reached the provider. `rehearsal`
+ * means the transport was stubbed: the run exercises this harness end to end
+ * and says nothing whatever about the classifier.
+ */
+export type MachineExecutionMode = "live" | "rehearsal";
+
 export interface MachineAggregate {
-  readonly schemaVersion: "classifier-eval/machine-release-aggregate/v2";
+  readonly schemaVersion: typeof MACHINE_AGGREGATE_SCHEMA | typeof MACHINE_REHEARSAL_SCHEMA;
+  readonly executionMode: MachineExecutionMode;
   readonly terminal: "machine-release-pass" | "machine-release-fail";
   readonly candidateManifestHash: string;
   readonly corpusDigest: string;
@@ -613,16 +642,42 @@ export async function probeProviderHealth(input: {
  * The reviewer never receives a category or an expected decision: the only
  * values crossing this boundary are `BlindedFixture` ids and command text.
  */
+/**
+ * Everything the draw needs from a running provider, and nothing more.
+ *
+ * The default implementation boots a real `opencode serve`. A rehearsal
+ * supplies a scripted client instead, which is the only seam in the release
+ * path that a live model call sits behind -- the reviewer agent, the prompt it
+ * builds, the schema it parses, the terminal-kind mapping, the abort guards and
+ * the scoring are all the shipped code either way.
+ */
+export interface DrawTransport {
+  readonly client: ReviewerSessionClient;
+  /** Where a reader should look for diagnostics when this draw aborts. */
+  readonly logPath: string;
+  /** True once the transport can no longer serve requests. */
+  readonly exited: () => boolean;
+  readonly dispose: () => Promise<void>;
+}
+
 export async function runBlindedDraw(input: {
   readonly blinded: readonly BlindedFixture[];
   readonly onStatus: (message: string) => void;
   readonly modelProfile: ModelProfile;
+  /**
+   * Transport factory, defaulting to a real qualification server. Injected only
+   * by the offline rehearsal; `runMachineRelease`'s operator path never sets it,
+   * so a draw cannot silently stop calling the provider.
+   */
+  readonly openTransport?: () => Promise<DrawTransport>;
 }): Promise<readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }[]> {
-  // Idempotent: `runMachineRelease` already ran this before spending custody.
-  // Repeating it keeps direct callers of `runBlindedDraw` honest.
-  const authPath = assertQualificationRuntime();
-
-  const server = await startQualificationServer({ modelProfile: input.modelProfile, label: "draw", authPath });
+  const server = await (input.openTransport ?? (async (): Promise<DrawTransport> => {
+    // Idempotent: `runMachineRelease` already ran this before spending custody.
+    // Repeating it keeps direct callers of `runBlindedDraw` honest.
+    const authPath = assertQualificationRuntime();
+    const booted = await startQualificationServer({ modelProfile: input.modelProfile, label: "draw", authPath });
+    return { client: booted.client as unknown as ReviewerSessionClient, logPath: booted.logPath, exited: booted.exited, dispose: booted.dispose };
+  }))();
   // Two release draws died on `session_create_error` with the server log silent
   // and the cause discarded by the reviewer. Capture it here instead, where the
   // frozen candidate is not at stake.
@@ -635,7 +690,7 @@ export async function runBlindedDraw(input: {
   let completed = 0;
   const progress = setInterval(() => input.onStatus(`machine release ${completed}/${jobs.length} invocations complete`), 8_000);
   let aborted: MachineDrawAbortedError | undefined;
-  let consecutiveSessionFailures = 0;
+  let consecutiveTransportFailures = 0;
   try {
     let nextJob = 0;
     const worker = async (): Promise<void> => {
@@ -676,10 +731,10 @@ export async function runBlindedDraw(input: {
           valid = terminalKind === "valid_model";
           // Counted only on reviewer-routed jobs: a deterministic job never
           // touches the provider, so letting one reset the streak would mask a
-          // dead server behind whatever benign commands happened to interleave.
-          consecutiveSessionFailures = nextSessionFailureStreak(consecutiveSessionFailures, terminalKind, valid);
-          if (consecutiveSessionFailures >= CONSECUTIVE_SESSION_FAILURE_LIMIT) {
-            aborted ??= new MachineDrawAbortedError(`${consecutiveSessionFailures} consecutive reviewer sessions failed to open`, server.logPath, transportFaults);
+          // dead transport behind whatever benign commands happened to interleave.
+          consecutiveTransportFailures = nextTransportFailureStreak(consecutiveTransportFailures, terminalKind, valid);
+          if (consecutiveTransportFailures >= CONSECUTIVE_TRANSPORT_FAILURE_LIMIT) {
+            aborted ??= new MachineDrawAbortedError(`${consecutiveTransportFailures} consecutive reviewer invocations failed at the transport`, server.logPath, transportFaults);
           }
         }
         results[jobIndex] = { fixtureID: job.fixture.id, repeat: job.repeat, decision, route, providerAttempted, terminalKind, valid, latencyMs: performance.now() - started };
@@ -734,6 +789,7 @@ export function writeMachineAbortRecord(aggregatePath: string, input: {
   readonly reviewerRoutedFixtures: number;
   readonly generatedAt?: string;
   readonly transportFaults?: readonly TransportFault[];
+  readonly executionMode?: MachineExecutionMode;
 }): string {
   const path = machineAbortRecordPath(aggregatePath);
   archiveExistingArtifact(path);
@@ -741,6 +797,7 @@ export function writeMachineAbortRecord(aggregatePath: string, input: {
   const record = {
     schemaVersion: 1,
     terminal: "machine-release-aborted",
+    executionMode: input.executionMode ?? "live",
     reason: input.reason,
     serverLogPath: input.serverLogPath,
     candidateManifestHash: input.candidateManifestHash,
@@ -814,11 +871,33 @@ export function armCustodySignalGuard(input: {
   return disarm;
 }
 
+/** Basename prefix a rehearsal artifact must carry, and a draw must never carry. */
+export const REHEARSAL_ARTIFACT_PREFIX = "machine-release-rehearsal";
+
+/**
+ * Refuse to write a run to a filename that misstates what produced it.
+ *
+ * The field and the schema are claims inside the file; this is the one marker
+ * visible without opening it, which is how artifacts are actually cited. A
+ * rehearsal cannot be written to `machine-release-aggregate-*.json`, and a draw
+ * cannot be hidden under a rehearsal name.
+ */
+export function assertAggregateDestination(path: string, executionMode: MachineExecutionMode): void {
+  const name = basename(resolve(path));
+  const namedAsRehearsal = name.startsWith(REHEARSAL_ARTIFACT_PREFIX);
+  if (executionMode === "rehearsal" && !namedAsRehearsal) throw new Error(`a rehearsal artifact must be named ${REHEARSAL_ARTIFACT_PREFIX}*, and ${name} is not`);
+  if (executionMode === "live" && namedAsRehearsal) throw new Error(`a live draw must not be written to a rehearsal path: ${name}`);
+}
+
 export async function writeMachineReleaseAggregate(
   path: string,
   aggregate: unknown,
   onStatus: (message: string) => void = () => undefined,
 ): Promise<void> {
+  // Read off the artifact rather than taken as an argument: the guard has to
+  // hold for every caller, including one that forgot the mode existed.
+  const claimed = (aggregate as { readonly executionMode?: unknown } | null | undefined)?.executionMode;
+  assertAggregateDestination(path, claimed === "rehearsal" ? "rehearsal" : "live");
   const archived = archiveExistingArtifact(path);
   if (archived) onStatus(`previous release aggregate archived to ${archived}`);
   await Bun.write(resolve(path), `${JSON.stringify(aggregate, null, 2)}\n`);
@@ -831,7 +910,14 @@ export function scoreMachineRun(input: {
   readonly custodyNumber: number;
   readonly priorConsumptions?: readonly { readonly consumptionNumber: number; readonly reason: string }[];
   readonly generatedAt: string;
+  /**
+   * Defaults to `live`. Scoring itself does not branch on this: a rehearsal is
+   * scored by exactly the rules a draw is, so the offline suite exercises the
+   * thresholds that ship rather than a parallel copy of them.
+   */
+  readonly executionMode?: MachineExecutionMode;
 }): MachineAggregate {
+  const executionMode: MachineExecutionMode = input.executionMode ?? "live";
   const labels = labelIndex(input.corpus.release);
   const observations: MachineObservation[] = [];
   for (const result of input.results) {
@@ -905,7 +991,8 @@ export function scoreMachineRun(input: {
   if (errorPathObservations.length > 0 && errorPathManual !== errorPathObservations.length) failures.push(`error-path manual: ${errorPathManual}/${errorPathObservations.length}`);
 
   return {
-    schemaVersion: "classifier-eval/machine-release-aggregate/v2",
+    schemaVersion: executionMode === "rehearsal" ? MACHINE_REHEARSAL_SCHEMA : MACHINE_AGGREGATE_SCHEMA,
+    executionMode,
     terminal: failures.length === 0 ? "machine-release-pass" : "machine-release-fail",
     candidateManifestHash: input.corpus.bindings.candidateManifestHash,
     corpusDigest: input.corpusDigest,
@@ -945,6 +1032,14 @@ export interface MachineReleaseOptions {
    * provider. `main` never passes it, so the operator path cannot opt out.
    */
   readonly probeProvider?: (input: { readonly modelProfile: ModelProfile; readonly onStatus: (message: string) => void }) => Promise<void>;
+  /**
+   * Transport factory for the draw, defaulting to a real qualification server.
+   *
+   * Supplying it makes the run a rehearsal: the artifact is written under a
+   * rehearsal schema, a rehearsal `executionMode` and a rehearsal filename, and
+   * cannot be mistaken for a spent corpus. `main` never passes it.
+   */
+  readonly openTransport?: () => Promise<DrawTransport>;
   readonly ledgerPath: string;
   readonly aggregatePath: string;
   readonly generatedAt: string;
@@ -982,6 +1077,11 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // whatever happens to be current when the read lands.
   const candidatePath = options.candidatePath ? resolve(options.candidatePath) : resolve(PROJECT_ROOT, "eval-results/frozen-candidate-manifest.json");
   const candidate = readCandidateManifest(candidatePath);
+  // A stubbed transport is the one thing that separates a rehearsal from a
+  // draw, so it is also what names the mode. Checked here, before anything
+  // irreversible, so a misnamed destination fails while custody is untouched.
+  const executionMode: MachineExecutionMode = options.openTransport ? "rehearsal" : "live";
+  assertAggregateDestination(options.aggregatePath, executionMode);
   assertDevelopmentGate(candidate, options.developmentReportPath ?? DEVELOPMENT_REPORT_PATH);
   // Every irreversible step is below this line. Fail on a missing binary, a
   // wrong OpenCode version, or an unset auth path while the ledger is still
@@ -1079,7 +1179,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // because a run that aborted has nothing to score.
   let results: Awaited<ReturnType<typeof runBlindedDraw>>;
   try {
-    results = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile });
+    results = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile, ...(options.openTransport ? { openTransport: options.openTransport } : {}) });
   } catch (error) {
     if (error instanceof MachineDrawAbortedError) {
       // A failure to write the record must not replace the abort reason. The
@@ -1095,6 +1195,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
           corpusVersion: corpus.corpusVersion,
           reviewerRoutedFixtures: corpus.release.filter((fixture) => fixture.route === "reviewer").length,
           transportFaults: error.transportFaults,
+          executionMode,
           generatedAt: options.generatedAt,
         });
         onStatus(`aborted: wrote ${recordPath}`);
@@ -1104,7 +1205,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
     }
     throw error;
   }
-  const aggregate = scoreMachineRun({ corpus, results, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt });
+  const aggregate = scoreMachineRun({ corpus, results, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt, executionMode });
   await writeMachineReleaseAggregate(options.aggregatePath, aggregate, onStatus);
   return aggregate;
   }

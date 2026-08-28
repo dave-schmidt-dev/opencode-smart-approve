@@ -156,6 +156,22 @@ which records per-stratum whether a command was authored or harvested.
 reach the reviewer at all. None of these enables model approval; a passing draw
 is a precondition for flipping the gate, not the flip itself.
 
+The machine path is rehearsed offline before it is ever run for real.
+`tests/eval/machine-release-rehearsal.test.ts` drives `runMachineRelease`
+itself -- runtime preflight, the pre-spend provider probe, custody, corpus
+validation, the digest companion, observed-route checking, blinding, the
+concurrent draw loop, the real reviewer agent and its schema parsing, the abort
+guards, transport-fault capture, scoring against the shipped thresholds and the
+artifact write -- against a scripted session client from
+`scripts/qualification/rehearsal.ts`. The single stubbed seam is `DrawTransport`,
+the boundary a live model call sits behind, so a rehearsal exercises the harness
+and says nothing whatever about the classifier. This exists because three
+consumptions of a one-use release corpus were spent discovering harness defects,
+which is the most expensive possible place to find them. A rehearsal artifact is
+marked three independent ways -- a `machine-release-rehearsal/v1` schema, an
+`executionMode: "rehearsal"` field, and a filename prefix the writer enforces --
+and `bun run spec:guard` rejects any committed document that cites one.
+
 Both release paths require a source-current `development-pass` report bound to
 the same candidate and reject `stop-disabled` or stale reports. The machine path
 performs this validation before ledger initialization/spend and before reading

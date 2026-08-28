@@ -123,6 +123,19 @@ const RETIRED_TEXT: readonly { readonly text: string; readonly reason: string }[
 
 const HEX64 = /\b[0-9a-f]{64}\b/g;
 
+/**
+ * A rehearsal artifact names a run whose provider was stubbed. Its decisions
+ * were chosen by a test, so it is evidence about the release harness and about
+ * nothing else -- least of all the classifier.
+ *
+ * The rule is that a committed document may not name one at all, rather than
+ * may not present one as evidence. Rehearsals are written into temp roots and
+ * deleted, so there is never a legitimate reason to cite the filename, and a
+ * flat prohibition has no prose to misread. The pattern deliberately requires
+ * the `.json` suffix so documentation may still name the rehearsal *suite*.
+ */
+const REHEARSAL_ARTIFACT = /machine-release-rehearsal[A-Za-z0-9._-]*\.json/g;
+
 /** Every candidate manifest on disk, including archived predecessors. */
 const manifestFiles = (root: string): string[] => {
   const base = resolve(root, "eval-results");
@@ -213,6 +226,11 @@ export function validateQuotedEvidence(root: string, validate: (value: unknown) 
           errors.push(`${doc} says "${claim.phrase}" but eval-results/frozen-candidate-manifest.json is ${current ? "source-current" : "stale"}`);
         }
       }
+    }
+
+    REHEARSAL_ARTIFACT.lastIndex = 0;
+    for (const match of flowed.matchAll(REHEARSAL_ARTIFACT)) {
+      errors.push(`${doc} names ${match[0]}, which is a rehearsal artifact from a stubbed run and is not evidence about a release draw or the classifier`);
     }
 
     // Skip the hash check when no manifest is on disk: every quoted hash would
