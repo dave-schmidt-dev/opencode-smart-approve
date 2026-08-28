@@ -2,7 +2,7 @@ import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { validateQuotedEvidence, validateTraceability } from "../../scripts/spec-guard";
+import { canonicalCandidateIsCurrent, validateQuotedEvidence, validateTraceability } from "../../scripts/spec-guard";
 import { REPLAN_EXECUTABLES } from "../../src/policy/executable-identity";
 import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 
@@ -180,6 +180,7 @@ describe("quoted evidence in committed documents", () => {
   const CURRENT_HASH = "a".repeat(64);
   const OTHER_HASH = "b".repeat(64);
   const stale = (): never => { throw new Error("candidate manifest hashes are stale"); };
+  const staleSourceManifest = (): never => { throw new Error("candidate manifest source manifest is stale"); };
   const current = (value: unknown): unknown => value;
 
   const evidenceRoot = (options: { readonly spec: string; readonly manifest?: boolean }): string => {
@@ -296,10 +297,83 @@ describe("quoted evidence in committed documents", () => {
     }
   });
 
+  test("a currency claim fails when source manifest is stale", () => {
+    const root = evidenceRoot({ spec: "The freeze validates as source-current today.\n" });
+    try {
+      expect(validateQuotedEvidence(root, staleSourceManifest).join(" ")).toContain("validates as source-current");
+      expect(validateQuotedEvidence(root, current)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("retired text is caught wherever it survived", () => {
     const root = evidenceRoot({ spec: "Release is pending fresh private corpus authorship, independent adjudication, and human custody.\n" });
     try {
       expect(validateQuotedEvidence(root, current).join(" ")).toContain("retired text");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("canonicalCandidateIsCurrent", () => {
+  const CURRENT_HASH = "a".repeat(64);
+
+  const candidateRoot = (options: { readonly manifest?: boolean } = {}): string => {
+    const root = mkdtempSync(join(tmpdir(), "smart-approve-canonical-"));
+    if (options.manifest !== false) {
+      mkdirSync(join(root, "eval-results"), { recursive: true });
+      writeFileSync(
+        join(root, "eval-results/frozen-candidate-manifest.json"),
+        JSON.stringify({ manifestHash: CURRENT_HASH }),
+      );
+    }
+    return root;
+  };
+
+  test("returns false when candidate manifest hashes are stale", () => {
+    const root = candidateRoot();
+    try {
+      expect(canonicalCandidateIsCurrent(root, () => { throw new Error("candidate manifest hashes are stale"); })).toBe(false);
+      expect(canonicalCandidateIsCurrent(root, () => { throw new Error("hashes are stale"); })).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("returns false when source manifest is stale", () => {
+    const root = candidateRoot();
+    try {
+      expect(canonicalCandidateIsCurrent(root, () => { throw new Error("candidate manifest source manifest is stale"); })).toBe(false);
+      expect(canonicalCandidateIsCurrent(root, () => { throw new Error("source manifest is stale"); })).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("returns undefined for an unrelated machine-local validation failure", () => {
+    const root = candidateRoot();
+    try {
+      expect(canonicalCandidateIsCurrent(root, () => { throw new Error("ENOENT: opencode binary missing"); })).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("returns true when candidate validates", () => {
+    const root = candidateRoot();
+    try {
+      expect(canonicalCandidateIsCurrent(root, (value) => value)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("returns undefined when manifest does not exist", () => {
+    const root = candidateRoot({ manifest: false });
+    try {
+      expect(canonicalCandidateIsCurrent(root, (value) => value)).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

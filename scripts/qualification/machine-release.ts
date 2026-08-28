@@ -45,6 +45,7 @@ import { validateModelProfile, type ModelProfile } from "../../src/reviewer/mode
 import {
   blindFixtures,
   labelIndex,
+  MACHINE_AUTHORITY_DISCLOSURE,
   validateMachineReleaseCorpus,
   type BlindedFixture,
   type MachineReleaseCorpus,
@@ -321,7 +322,9 @@ export interface MachineObservation {
  * onwards always has it.
  */
 export const MACHINE_AGGREGATE_SCHEMA = "classifier-eval/machine-release-aggregate/v3";
+export const MACHINE_AGGREGATE_V2_SCHEMA = "classifier-eval/machine-release-aggregate/v2";
 export const MACHINE_REHEARSAL_SCHEMA = "classifier-eval/machine-release-rehearsal/v1";
+export const MACHINE_OBSERVATIONS_SCHEMA = "classifier-eval/machine-release-observations/v1";
 
 /**
  * `live` means every model call in the run reached the provider. `rehearsal`
@@ -374,6 +377,170 @@ export interface MachineAggregate {
   readonly categoryAgreement: Readonly<Record<FixtureCategory, { readonly agreed: number; readonly total: number }>>;
   readonly thresholds: typeof MACHINE_THRESHOLDS;
   readonly failures: readonly string[];
+}
+
+const MACHINE_AGGREGATE_KEYS = [
+  "schemaVersion", "executionMode", "terminal", "candidateManifestHash", "corpusDigest", "custodyNumber",
+  "corpusVersion", "provenance", "generatedAt", "fixtures", "reviewerRoutedFixtures", "repeats", "observations",
+  "providerCalls", "terminalKindCounts", "invalidRuns", "criticalFalseApprovals", "criticalDenominator",
+  "untestedCriticalCategories", "benignFalseManual", "benignDenominator", "otherDisagreements", "errorPathManual",
+  "errorPathDenominator", "p95LatencyMs", "categoryAgreement", "thresholds", "failures",
+] as const;
+const MACHINE_AGGREGATE_OPTIONAL_KEYS = ["priorConsumptions"] as const;
+const MACHINE_AGGREGATE_V2_REQUIRED_KEYS = MACHINE_AGGREGATE_KEYS.filter((key) => key !== "executionMode");
+const MACHINE_AGGREGATE_V3_KEYS = [...MACHINE_AGGREGATE_KEYS, "transportFaults"] as const;
+
+function aggregateRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("machine release aggregate must be an object");
+  return value as Record<string, unknown>;
+}
+
+function exactAggregateKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): void {
+  const allowed = new Set([...required, ...optional]);
+  const keys = Object.keys(value);
+  const missing = required.find((key) => !Object.hasOwn(value, key));
+  const extra = keys.find((key) => !allowed.has(key));
+  if (missing || extra) throw new Error(`machine release aggregate has ${missing ? `missing ${missing}` : `unknown field ${extra}`}`);
+}
+
+function aggregateString(value: unknown, field: string): void {
+  if (typeof value !== "string" || value.length === 0) throw new Error(`machine release aggregate ${field} is invalid`);
+}
+
+function aggregateDigest(value: unknown, field: string): void {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new Error(`machine release aggregate ${field} is invalid`);
+}
+
+function aggregateNonNegativeInteger(value: unknown, field: string): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error(`machine release aggregate ${field} is invalid`);
+}
+
+function aggregateNonNegativeNumber(value: unknown, field: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`machine release aggregate ${field} is invalid`);
+}
+
+function validateAggregateProvenance(value: unknown): void {
+  const provenance = aggregateRecord(value);
+  exactAggregateKeys(provenance, ["authorModel", "authorVariant", "authorEffort", "authorTuningServed", "classifierUnderTest", "commandSource", "independentLabelCheck", "humanAttestation", "disclosure"]);
+  aggregateString(provenance.authorModel, "provenance.authorModel");
+  if (provenance.authorVariant !== null) aggregateString(provenance.authorVariant, "provenance.authorVariant");
+  if (provenance.authorEffort !== null) aggregateString(provenance.authorEffort, "provenance.authorEffort");
+  if (provenance.authorTuningServed !== "unverified") throw new Error("machine release aggregate provenance.authorTuningServed is invalid");
+  aggregateString(provenance.classifierUnderTest, "provenance.classifierUnderTest");
+  if (typeof provenance.independentLabelCheck !== "boolean" || provenance.humanAttestation !== false) throw new Error("machine release aggregate provenance attestation is invalid");
+  if (provenance.disclosure !== MACHINE_AUTHORITY_DISCLOSURE) throw new Error("machine release aggregate provenance disclosure is invalid");
+  const sources = aggregateRecord(provenance.commandSource);
+  exactAggregateKeys(sources, CATEGORIES);
+  for (const category of CATEGORIES) if (sources[category] !== "model-authored" && sources[category] !== "harvested-local-usage") throw new Error(`machine release aggregate command source is invalid for ${category}`);
+}
+
+function validateAggregateTransportFaults(value: unknown): void {
+  if (!Array.isArray(value)) throw new Error("machine release aggregate transportFaults must be an array");
+  for (const candidate of value) {
+    const fault = aggregateRecord(candidate);
+    exactAggregateKeys(fault, ["phase", "name", "status", "code", "count"]);
+    if (fault.phase !== "session.create" && fault.phase !== "session.prompt") throw new Error("machine release aggregate transport fault phase is invalid");
+    if (typeof fault.name !== "string" || !SAFE_NAME.test(fault.name)) throw new Error("machine release aggregate transport fault name is invalid");
+    if (fault.status !== null && (typeof fault.status !== "number" || !Number.isSafeInteger(fault.status) || fault.status < 100 || fault.status > 599)) throw new Error("machine release aggregate transport fault status is invalid");
+    if (fault.code !== null && (typeof fault.code !== "string" || !SAFE_CODE.test(fault.code))) throw new Error("machine release aggregate transport fault code is invalid");
+    if (typeof fault.count !== "number" || !Number.isSafeInteger(fault.count) || fault.count < 1) throw new Error("machine release aggregate transport fault count is invalid");
+  }
+}
+
+/** Validate a live or rehearsal aggregate, normalizing legacy v2 fault omission. */
+export function validateMachineReleaseAggregate(value: unknown): MachineAggregate {
+  const aggregate = aggregateRecord(value);
+  const schemaVersion = aggregate.schemaVersion;
+  const isV2 = schemaVersion === MACHINE_AGGREGATE_V2_SCHEMA;
+  const isV3 = schemaVersion === MACHINE_AGGREGATE_SCHEMA;
+  const isRehearsal = schemaVersion === MACHINE_REHEARSAL_SCHEMA;
+  if (!isV2 && !isV3 && !isRehearsal) throw new Error("machine release aggregate schema version is unsupported");
+  exactAggregateKeys(aggregate, isV2 ? MACHINE_AGGREGATE_V2_REQUIRED_KEYS : MACHINE_AGGREGATE_V3_KEYS, isV2 ? [...MACHINE_AGGREGATE_OPTIONAL_KEYS, "executionMode", "transportFaults"] : MACHINE_AGGREGATE_OPTIONAL_KEYS);
+  if ((isV2 || isV3) && Object.hasOwn(aggregate, "executionMode") && aggregate.executionMode !== "live") throw new Error("machine release aggregate execution mode is invalid");
+  if (isRehearsal && aggregate.executionMode !== "rehearsal") throw new Error("machine release rehearsal execution mode is invalid");
+  if (aggregate.terminal !== "machine-release-pass" && aggregate.terminal !== "machine-release-fail") throw new Error("machine release aggregate terminal is invalid");
+  aggregateDigest(aggregate.candidateManifestHash, "candidateManifestHash");
+  aggregateDigest(aggregate.corpusDigest, "corpusDigest");
+  if (typeof aggregate.custodyNumber !== "number" || !Number.isSafeInteger(aggregate.custodyNumber) || aggregate.custodyNumber < 1) throw new Error("machine release aggregate custodyNumber is invalid");
+  aggregateString(aggregate.corpusVersion, "corpusVersion");
+  validateAggregateProvenance(aggregate.provenance);
+  aggregateString(aggregate.generatedAt, "generatedAt");
+  for (const field of ["fixtures", "reviewerRoutedFixtures", "repeats", "observations", "providerCalls", "invalidRuns", "criticalFalseApprovals", "criticalDenominator", "benignFalseManual", "benignDenominator", "otherDisagreements", "errorPathManual", "errorPathDenominator"] as const) aggregateNonNegativeInteger(aggregate[field], field);
+  if (aggregate.repeats !== REPEAT_COUNT) throw new Error("machine release aggregate repeats is invalid");
+  aggregateNonNegativeNumber(aggregate.p95LatencyMs, "p95LatencyMs");
+  const terminalCounts = aggregateRecord(aggregate.terminalKindCounts);
+  exactAggregateKeys(terminalCounts, TERMINAL_KINDS);
+  for (const kind of TERMINAL_KINDS) aggregateNonNegativeInteger(terminalCounts[kind], `terminalKindCounts.${kind}`);
+  const untested = aggregate.untestedCriticalCategories;
+  if (!Array.isArray(untested) || untested.some((category) => !(CATEGORIES as readonly string[]).includes(category as string))) throw new Error("machine release aggregate untestedCriticalCategories is invalid");
+  const agreement = aggregateRecord(aggregate.categoryAgreement);
+  exactAggregateKeys(agreement, CATEGORIES);
+  for (const category of CATEGORIES) {
+    const row = aggregateRecord(agreement[category]);
+    exactAggregateKeys(row, ["agreed", "total"]);
+    aggregateNonNegativeInteger(row.agreed, `categoryAgreement.${category}.agreed`);
+    aggregateNonNegativeInteger(row.total, `categoryAgreement.${category}.total`);
+  }
+  const thresholds = aggregateRecord(aggregate.thresholds);
+  exactAggregateKeys(thresholds, Object.keys(MACHINE_THRESHOLDS));
+  if (thresholds.criticalFalseApprovals !== MACHINE_THRESHOLDS.criticalFalseApprovals || thresholds.untestedCriticalCategoryLimit !== MACHINE_THRESHOLDS.untestedCriticalCategoryLimit || thresholds.benignFalseManualLimit !== MACHINE_THRESHOLDS.benignFalseManualLimit || thresholds.otherDisagreementLimit !== MACHINE_THRESHOLDS.otherDisagreementLimit || thresholds.p95LimitMs !== MACHINE_THRESHOLDS.p95LimitMs || thresholds.minReviewerRoutedFixtures !== MACHINE_THRESHOLDS.minReviewerRoutedFixtures || thresholds.statement !== MACHINE_THRESHOLDS.statement) throw new Error("machine release aggregate thresholds are invalid");
+  if (!Array.isArray(aggregate.failures) || aggregate.failures.some((failure) => typeof failure !== "string")) throw new Error("machine release aggregate failures are invalid");
+  if (Object.hasOwn(aggregate, "priorConsumptions")) {
+    if (!Array.isArray(aggregate.priorConsumptions)) throw new Error("machine release aggregate priorConsumptions is invalid");
+    for (const candidate of aggregate.priorConsumptions) {
+      const prior = aggregateRecord(candidate);
+      exactAggregateKeys(prior, ["consumptionNumber", "reason"]);
+      if (typeof prior.consumptionNumber !== "number" || !Number.isSafeInteger(prior.consumptionNumber) || prior.consumptionNumber < 1) throw new Error("machine release aggregate prior consumption number is invalid");
+      aggregateString(prior.reason, "priorConsumptions.reason");
+    }
+  }
+  if (isV2 && (!Object.hasOwn(aggregate, "executionMode") || !Object.hasOwn(aggregate, "transportFaults"))) return { ...aggregate, executionMode: aggregate.executionMode ?? "live", transportFaults: aggregate.transportFaults ?? [] } as unknown as MachineAggregate;
+  validateAggregateTransportFaults(aggregate.transportFaults);
+  return aggregate as unknown as MachineAggregate;
+}
+
+export type MachineObservationEvidence = {
+  readonly fixtureID: string;
+  readonly repeat: number;
+  readonly expectedDecision: "allow" | "manual";
+  readonly latencyMs: number;
+} & ({ readonly observedDecision: "allow" | "manual" } | {
+  readonly terminalKind: Exclude<TerminalKind, "valid_model">;
+});
+
+export interface MachineObservationEvidenceArtifact {
+  readonly schemaVersion: typeof MACHINE_OBSERVATIONS_SCHEMA;
+  readonly observations: readonly MachineObservationEvidence[];
+}
+
+const OBSERVATION_BASE_KEYS = ["expectedDecision", "fixtureID", "latencyMs", "repeat"] as const;
+const OPAQUE_FIXTURE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const FAILURE_TERMINAL_KINDS = new Set<TerminalKind>(TERMINAL_KINDS.filter((kind) => kind !== "valid_model"));
+
+function exactObservationKeys(value: Record<string, unknown>, outcomeKey: "observedDecision" | "terminalKind"): boolean {
+  return Object.keys(value).sort().join(",") === [...OBSERVATION_BASE_KEYS, outcomeKey].sort().join(",");
+}
+
+/** Validate the privacy boundary before any per-observation evidence is written. */
+export function validateMachineObservationEvidence(value: unknown): asserts value is MachineObservationEvidenceArtifact {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("machine observation evidence must be an object");
+  const artifact = value as Record<string, unknown>;
+  if (Object.keys(artifact).sort().join(",") !== ["observations", "schemaVersion"].join(",")) throw new Error("machine observation evidence has unknown or missing fields");
+  if (artifact.schemaVersion !== MACHINE_OBSERVATIONS_SCHEMA) throw new Error("machine observation evidence schema version is unsupported");
+  if (!Array.isArray(artifact.observations)) throw new Error("machine observation evidence observations must be an array");
+  for (const candidate of artifact.observations) {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) throw new Error("machine observation evidence entry must be an object");
+    const observation = candidate as Record<string, unknown>;
+    const hasDecision = Object.hasOwn(observation, "observedDecision");
+    const hasTerminal = Object.hasOwn(observation, "terminalKind");
+    if (hasDecision === hasTerminal || !exactObservationKeys(observation, hasDecision ? "observedDecision" : "terminalKind")) throw new Error("machine observation evidence entry has unknown, missing, or conflicting fields");
+    if (typeof observation.fixtureID !== "string" || !OPAQUE_FIXTURE_ID.test(observation.fixtureID)) throw new Error("machine observation fixture ID is not opaque");
+    if (!Number.isInteger(observation.repeat) || Number(observation.repeat) < 1 || Number(observation.repeat) > REPEAT_COUNT) throw new Error("machine observation repeat is invalid");
+    if (observation.expectedDecision !== "allow" && observation.expectedDecision !== "manual") throw new Error("machine observation expected decision is invalid");
+    if (typeof observation.latencyMs !== "number" || !Number.isFinite(observation.latencyMs) || observation.latencyMs < 0) throw new Error("machine observation latency is invalid");
+    if (hasDecision && observation.observedDecision !== "allow" && observation.observedDecision !== "manual") throw new Error("machine observation decision is invalid");
+    if (hasTerminal && (typeof observation.terminalKind !== "string" || !FAILURE_TERMINAL_KINDS.has(observation.terminalKind as TerminalKind))) throw new Error("machine observation terminal kind is invalid");
+  }
 }
 
 function percentile(values: readonly number[], fraction: number): number {
@@ -459,7 +626,7 @@ export function normalizeMachineTerminalKind(input: {
 }
 
 /** A booted, isolated qualification server plus the handles to observe and stop it. */
-interface QualificationServer {
+export interface QualificationServer {
   readonly baseUrl: string;
   readonly client: ReturnType<typeof createOpencodeClient>;
   /** Gitignored file holding the server's own stdout and stderr for this run. */
@@ -520,7 +687,7 @@ export function reapLiveServers(): string | undefined {
   return logPath;
 }
 
-async function startQualificationServer(input: {
+export async function startQualificationServer(input: {
   readonly modelProfile: ModelProfile;
   readonly label: string;
   readonly authPath: string;
@@ -841,6 +1008,66 @@ export function machineAbortRecordPath(aggregatePath: string): string {
   return join(dirname(resolved), `${basename(resolved, extname(resolved))}-aborted${extension}`);
 }
 
+/** Sibling of the aggregate, separate so summary consumers do not ingest attribution by accident. */
+export function machineObservationEvidencePath(aggregatePath: string): string {
+  const resolved = resolve(aggregatePath);
+  const extension = extname(resolved) || ".json";
+  return join(dirname(resolved), `${basename(resolved, extname(resolved))}-observations${extension}`);
+}
+
+export function createMachineObservationEvidence(corpus: MachineReleaseCorpus, results: readonly DrawResult[]): MachineObservationEvidenceArtifact {
+  const labels = labelIndex(corpus.release);
+  const observations: MachineObservationEvidence[] = [];
+  for (const result of results) {
+    if (result.route !== "reviewer") continue;
+    const fixture = labels.get(result.fixtureID);
+    if (!fixture) throw new Error(`result referenced an unknown fixture: ${result.fixtureID}`);
+    const base = { fixtureID: result.fixtureID, repeat: result.repeat, expectedDecision: fixture.expectedDecision, latencyMs: result.latencyMs };
+    observations.push(result.valid
+      ? { ...base, observedDecision: result.decision }
+      : { ...base, terminalKind: result.terminalKind as Exclude<TerminalKind, "valid_model"> });
+  }
+  const artifact: MachineObservationEvidenceArtifact = { schemaVersion: MACHINE_OBSERVATIONS_SCHEMA, observations };
+  validateMachineObservationEvidence(artifact);
+  return artifact;
+}
+
+export async function writeMachineObservationEvidence(
+  aggregatePath: string,
+  artifact: unknown,
+  onStatus: (message: string) => void = () => undefined,
+): Promise<string> {
+  validateMachineObservationEvidence(artifact);
+  const path = machineObservationEvidencePath(aggregatePath);
+  const archived = archiveExistingArtifact(path);
+  if (archived) onStatus(`previous observation evidence archived to ${archived}`);
+  await Bun.write(path, `${JSON.stringify(artifact, null, 2)}\n`);
+  return path;
+}
+
+/**
+ * Persist the score first, then add failure attribution without putting the
+ * one-use draw's primary record at the mercy of a secondary write.
+ */
+export async function writeMachineReleaseResultArtifacts(input: {
+  readonly aggregatePath: string;
+  readonly aggregate: MachineAggregate;
+  readonly createObservationEvidence: () => MachineObservationEvidenceArtifact;
+  readonly onStatus?: (message: string) => void;
+  /** Test seam for proving a sidecar filesystem failure cannot erase the score. */
+  readonly writeObservationEvidence?: typeof writeMachineObservationEvidence;
+}): Promise<void> {
+  const onStatus = input.onStatus ?? (() => undefined);
+  await writeMachineReleaseAggregate(input.aggregatePath, input.aggregate, onStatus);
+  if (input.aggregate.terminal !== "machine-release-fail") return;
+  try {
+    const evidencePath = await (input.writeObservationEvidence ?? writeMachineObservationEvidence)(input.aggregatePath, input.createObservationEvidence(), onStatus);
+    onStatus(`failure observations: wrote ${evidencePath}`);
+  } catch (error) {
+    onStatus(`failure observations: could not write sidecar (${error instanceof Error ? error.message : String(error)}); aggregate preserved at ${resolve(input.aggregatePath)}`);
+  }
+}
+
 /**
  * Record that a draw spent custody and produced no scoreable result.
  *
@@ -969,9 +1196,10 @@ export async function writeMachineReleaseAggregate(
   // hold for every caller, including one that forgot the mode existed.
   const claimed = (aggregate as { readonly executionMode?: unknown } | null | undefined)?.executionMode;
   assertAggregateDestination(path, claimed === "rehearsal" ? "rehearsal" : "live");
+  const validated = validateMachineReleaseAggregate(aggregate);
   const archived = archiveExistingArtifact(path);
   if (archived) onStatus(`previous release aggregate archived to ${archived}`);
-  await Bun.write(resolve(path), `${JSON.stringify(aggregate, null, 2)}\n`);
+  await Bun.write(resolve(path), `${JSON.stringify(validated, null, 2)}\n`);
 }
 
 export function scoreMachineRun(input: {
@@ -1185,10 +1413,9 @@ function validateMachineReleaseInputs(options: MachineReleasePreflightOptions): 
  *
  * In a draw all of this runs on the spent side of the ledger, because the
  * commands are private and cannot be read before the spend. That ordering is
- * deliberate and stays. It also means a stale binding or a drifted route
- * destroys a consumption and produces nothing at all -- the abort record covers
- * a dead transport, not a rejected corpus. So the same function is reachable
- * from `--preflight`, where it costs nothing.
+ * deliberate and stays. A rejection is recorded as an abort with a sanitized
+ * reason before it is rethrown. The same function is reachable from
+ * `--preflight`, where it costs nothing.
  */
 export async function openReleaseCorpus(corpusPath: string, digestCompanion: string, candidate: FrozenCandidateManifest): Promise<MachineReleaseCorpus> {
   const corpusBytes = readFileSync(corpusPath, "utf8");
@@ -1207,6 +1434,18 @@ export async function openReleaseCorpus(corpusPath: string, digestCompanion: str
   // classifier result.
   await assertObservedRoutes(corpus.release);
   return corpus;
+}
+
+/** Keep private corpus details out of an abort record while naming the rejection. */
+function sanitizeCorpusRejectionReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("digest does not match")) return "digest mismatch";
+  if (message.includes("bound to candidate") || message.includes("candidate")) return "candidate binding mismatch";
+  if (message.includes("routes are declared")) return "route mismatch";
+  if (message.includes("failed validation")) return "corpus validation failed";
+  if (message.includes("classifier")) return "classifier binding mismatch";
+  if (error instanceof SyntaxError) return "corpus JSON invalid";
+  return "corpus could not be opened";
 }
 
 /** What a preflight can say without opening a provider connection. */
@@ -1243,11 +1482,10 @@ function readLedgerState(path: string): "available" | "reserved" | "spent" | "un
  * nothing.
  *
  * This exists because of where the checks have to sit. Everything in
- * `openReleaseCorpus` runs after the spend in a real draw, and any of it can
- * throw a plain `Error`, which writes no abort record: the ledger is consumed
- * and the run has nothing to show. That is the shape of loss this corpus has
- * already suffered. A preflight is the same checks on the `available` side, so
- * the only thing a draw can still lose to is the transport.
+ * `openReleaseCorpus` runs after the spend in a real draw, and any rejection is
+ * recorded as an abort before it is rethrown. A preflight is the same checks on
+ * the `available` side, so the only thing a draw can still lose to is the
+ * transport.
  *
  * It deliberately does not probe the provider. The probe is a provider call and
  * belongs to the run that is about to spend; a preflight that made it would be
@@ -1346,10 +1584,30 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   async function drawAndScore(): Promise<MachineAggregate> {
   // Custody is already spent by here: the commands are private and cannot be
   // read before the spend, so every check in `openReleaseCorpus` costs a
-  // consumption if it fails, and fails with no abort record. That is what
-  // `--preflight` is for — the same function, the same bytes, run while the
-  // ledger is still `available`.
-  const corpus = await openReleaseCorpus(corpusPath, digestCompanion, candidate);
+  // consumption if it fails. Record that rejection before rethrowing, without
+  // copying the private error text into durable evidence.
+  let corpus: MachineReleaseCorpus;
+  try {
+    corpus = await openReleaseCorpus(corpusPath, digestCompanion, candidate);
+  } catch (error) {
+    try {
+      const recordPath = writeMachineAbortRecord(options.aggregatePath, {
+        reason: `post-spend corpus rejection: ${sanitizeCorpusRejectionReason(error)}`,
+        serverLogPath: SERVER_LOG_DIR,
+        candidateManifestHash: candidate.manifestHash,
+        corpusDigest: digestCompanion,
+        custodyNumber: spent.consumptionNumber,
+        corpusVersion: "unread: corpus rejected before parsing completed",
+        reviewerRoutedFixtures: 0,
+        executionMode,
+        generatedAt: options.generatedAt,
+      });
+      onStatus(`aborted: wrote ${recordPath}`);
+    } catch (writeError) {
+      onStatus(`aborted: could not write the abort record (${writeError instanceof Error ? writeError.message : String(writeError)}); server log is ${SERVER_LOG_DIR}`);
+    }
+    throw error;
+  }
 
   // Only reviewer-routed fixtures reach the model. Secret and error-path
   // fixtures are deterministic-manual by rubric and never call a provider.
@@ -1390,7 +1648,12 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
     throw error;
   }
   const aggregate = scoreMachineRun({ corpus, results: drawn.results, transportFaults: drawn.transportFaults, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt, executionMode });
-  await writeMachineReleaseAggregate(options.aggregatePath, aggregate, onStatus);
+  await writeMachineReleaseResultArtifacts({
+    aggregatePath: options.aggregatePath,
+    aggregate,
+    createObservationEvidence: () => createMachineObservationEvidence(corpus, drawn.results),
+    onStatus,
+  });
   return aggregate;
   }
 }

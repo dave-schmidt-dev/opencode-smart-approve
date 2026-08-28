@@ -27,7 +27,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_TRANSPORT_FAILURE_LIMIT, describeTransportFault, instrumentTransport, machineAbortRecordPath, MachineDrawAbortedError, nextTransportFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun, SERVER_BOOT_ATTEMPTS, summarizeTransportFaults, writeMachineAbortRecord } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_TRANSPORT_FAILURE_LIMIT, createMachineObservationEvidence, describeTransportFault, instrumentTransport, MACHINE_OBSERVATIONS_SCHEMA, machineAbortRecordPath, machineObservationEvidencePath, MachineDrawAbortedError, nextTransportFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun, SERVER_BOOT_ATTEMPTS, summarizeTransportFaults, validateMachineObservationEvidence, writeMachineAbortRecord, writeMachineObservationEvidence, writeMachineReleaseResultArtifacts, type DrawResult } from "../../scripts/qualification/machine-release";
 import { MODEL_PROFILES } from "../../src/reviewer/model-profile";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { digestPrivateBytes, initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
@@ -59,7 +59,6 @@ import type { PrivateReleaseFixture } from "../../scripts/qualification/release-
  * Replace this with a proper `test:offline` entry at the next candidate
  * re-freeze, whenever one is taken for an unrelated reason.
  */
-import "./machine-release-rehearsal.test";
 
 const CANDIDATE = "d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5";
 /**
@@ -527,6 +526,103 @@ describe("machine run scoring", () => {
     const serialized = JSON.stringify(aggregate);
     for (const entry of corpus.release) expect(serialized).not.toContain(entry.command);
     expect(serialized).not.toContain("canaries");
+  });
+
+  test("live failure evidence is key-exact and contains only reviewer attribution", async () => {
+    const drawn: DrawResult[] = results((entry) => entry.expectedDecision);
+    const firstReviewer = drawn.findIndex((entry) => entry.route === "reviewer");
+    const secondReviewer = drawn.findIndex((entry, index) => index > firstReviewer && entry.route === "reviewer");
+    drawn[firstReviewer] = { ...drawn[firstReviewer]!, valid: false, terminalKind: "timeout" };
+    drawn[secondReviewer] = { ...drawn[secondReviewer]!, valid: false, terminalKind: "manual" };
+    const evidence = createMachineObservationEvidence(corpus, drawn);
+    validateMachineObservationEvidence(evidence);
+    expect(evidence.schemaVersion).toBe(MACHINE_OBSERVATIONS_SCHEMA);
+    expect(evidence.observations).toHaveLength(drawn.filter((entry) => entry.route === "reviewer").length);
+    expect(evidence.observations.some((entry) => "terminalKind" in entry && entry.terminalKind === "timeout")).toBe(true);
+    expect(evidence.observations.some((entry) => "terminalKind" in entry && entry.terminalKind === "manual")).toBe(true);
+    expect(evidence.observations.some((entry) => "observedDecision" in entry)).toBe(true);
+    for (const entry of evidence.observations) {
+      expect(Object.keys(entry).sort()).toEqual(("observedDecision" in entry
+        ? ["expectedDecision", "fixtureID", "latencyMs", "observedDecision", "repeat"]
+        : ["expectedDecision", "fixtureID", "latencyMs", "repeat", "terminalKind"]).sort());
+    }
+
+    const root = mkdtempSync(join(tmpdir(), "machine-release-live-observations-"));
+    try {
+      const aggregatePath = join(root, "machine-release-aggregate-v5.json");
+      const writtenPath = await writeMachineObservationEvidence(aggregatePath, evidence);
+      expect(writtenPath).toBe(machineObservationEvidencePath(aggregatePath));
+      expect(JSON.parse(readFileSync(writtenPath, "utf8"))).toEqual(evidence);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("command, prompt, path, provider, and response content cannot enter a valid observation", () => {
+    const base = {
+      schemaVersion: MACHINE_OBSERVATIONS_SCHEMA,
+      observations: [{ fixtureID: "opaque-fixture-001", repeat: 1, expectedDecision: "manual", observedDecision: "allow", latencyMs: 12 }],
+    };
+    const forbidden = {
+      command: "rm -rf private",
+      prompt: "private prompt bytes",
+      path: "/private/corpus/path",
+      provider: "provider-name",
+      response: "raw response content",
+    };
+    for (const [key, text] of Object.entries(forbidden)) {
+      const poisoned = { ...base, observations: [{ ...base.observations[0], [key]: text }] };
+      expect(() => validateMachineObservationEvidence(poisoned), key).toThrow(/unknown, missing, or conflicting fields/);
+    }
+    expect(() => validateMachineObservationEvidence({ ...base, command: "private command" })).toThrow(/unknown or missing fields/);
+    expect(() => validateMachineObservationEvidence({ ...base, observations: [{ ...base.observations[0], fixtureID: "/private/corpus/path" }] })).toThrow(/not opaque/);
+  });
+
+  test("the versioned JSON Schema mirrors the key-exact observation contract", () => {
+    const schema = JSON.parse(readFileSync(join(process.cwd(), "fixtures/eval/machine-release-observations.schema.json"), "utf8")) as any;
+    expect(schema.$id).toBe(MACHINE_OBSERVATIONS_SCHEMA);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required.sort()).toEqual(["observations", "schemaVersion"]);
+    for (const variant of [schema.$defs.decisionObservation, schema.$defs.terminalObservation]) {
+      expect(variant.additionalProperties).toBe(false);
+      expect(variant.required.sort()).toEqual(Object.keys(variant.properties).sort());
+    }
+    const failureKinds = TERMINAL_KINDS.filter((kind) => kind !== "valid_model").sort();
+    expect(schema.$defs.terminalObservation.properties.terminalKind.enum.sort()).toEqual(failureKinds);
+    for (const terminalKind of failureKinds) {
+      expect(() => validateMachineObservationEvidence({
+        schemaVersion: MACHINE_OBSERVATIONS_SCHEMA,
+        observations: [{ fixtureID: "opaque-fixture-001", repeat: 1, expectedDecision: "manual", terminalKind, latencyMs: 12 }],
+      }), terminalKind).not.toThrow();
+    }
+  });
+
+  test("a sidecar write failure cannot suppress the primary aggregate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "machine-release-sidecar-failure-"));
+    try {
+      const aggregatePath = join(root, "machine-release-aggregate-v5.json");
+      const aggregate = scoreMachineRun({
+        corpus,
+        results: results((entry) => entry.category === "dangerous" ? "allow" : entry.expectedDecision),
+        corpusDigest: "a".repeat(64),
+        custodyNumber: 1,
+        generatedAt: AUTHORED_AT,
+      });
+      expect(aggregate.terminal).toBe("machine-release-fail");
+      const status: string[] = [];
+      await expect(writeMachineReleaseResultArtifacts({
+        aggregatePath,
+        aggregate,
+        createObservationEvidence: () => createMachineObservationEvidence(corpus, results((entry) => entry.expectedDecision)),
+        onStatus: (message) => { status.push(message); },
+        writeObservationEvidence: async () => { throw new Error("simulated sidecar failure"); },
+      })).resolves.toBeUndefined();
+      expect(JSON.parse(readFileSync(aggregatePath, "utf8"))).toEqual(aggregate);
+      expect(existsSync(machineObservationEvidencePath(aggregatePath))).toBe(false);
+      expect(status).toContain(`failure observations: could not write sidecar (simulated sidecar failure); aggregate preserved at ${aggregatePath}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("the aggregate preserves the machine-authority disclosure", () => {

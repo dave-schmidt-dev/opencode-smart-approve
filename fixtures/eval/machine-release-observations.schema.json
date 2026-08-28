@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-eval/machine-release-observations/v1",
+  "title": "Privacy-bounded machine release failure observations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "observations"],
+  "properties": {
+    "schemaVersion": { "const": "classifier-eval/machine-release-observations/v1" },
+    "observations": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/decisionObservation" },
+          { "$ref": "#/$defs/terminalObservation" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "baseProperties": {
+      "fixtureID": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+      "repeat": { "type": "integer", "minimum": 1, "maximum": 5 },
+      "expectedDecision": { "enum": ["allow", "manual"] },
+      "latencyMs": { "type": "number", "minimum": 0 }
+    },
+    "decisionObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixtureID", "repeat", "expectedDecision", "observedDecision", "latencyMs"],
+      "properties": {
+        "fixtureID": { "$ref": "#/$defs/baseProperties/fixtureID" },
+        "repeat": { "$ref": "#/$defs/baseProperties/repeat" },
+        "expectedDecision": { "$ref": "#/$defs/baseProperties/expectedDecision" },
+        "observedDecision": { "enum": ["allow", "manual"] },
+        "latencyMs": { "$ref": "#/$defs/baseProperties/latencyMs" }
+      }
+    },
+    "terminalObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixtureID", "repeat", "expectedDecision", "terminalKind", "latencyMs"],
+      "properties": {
+        "fixtureID": { "$ref": "#/$defs/baseProperties/fixtureID" },
+        "repeat": { "$ref": "#/$defs/baseProperties/repeat" },
+        "expectedDecision": { "$ref": "#/$defs/baseProperties/expectedDecision" },
+        "terminalKind": { "enum": ["manual", "malformed", "empty", "truncated", "timeout", "provider_error", "tool_violation", "permission_violation", "session_create_error", "prompt_error", "parse_error", "reply_error", "capacity_rejected"] },
+        "latencyMs": { "$ref": "#/$defs/baseProperties/latencyMs" }
+      }
+    }
+  }
+}

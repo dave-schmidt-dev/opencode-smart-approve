@@ -156,7 +156,13 @@ custody before opening private input, so an interrupted run cannot be re-drawn
 for a better result. Authoring writes `${outputPath}.digest.json` automatically;
 the public companion records only the candidate binding and SHA-256 identity of
 the exact corpus bytes. Release validates that companion before custody, then
-checks the private bytes against it after spending. `scripts/qualification/machine-authority.ts`
+checks the private bytes against it after spending. A failed scored draw also
+writes an `-observations.json` sibling after the aggregate. Its strict schema at
+`fixtures/eval/machine-release-observations.schema.json` permits only opaque
+fixture IDs, repeats, expected and observed decisions or terminal kinds, and
+latency; it permits no commands, prompts, paths, or provider response bytes. The
+aggregate remains durable if the sidecar cannot be written.
+`scripts/qualification/machine-authority.ts`
 holds the authority labels and the signed provenance, including `commandSource`,
 which records per-stratum whether a command was authored or harvested.
 `scripts/qualification/measure-routing.ts` reports what share of real executions

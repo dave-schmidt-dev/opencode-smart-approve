@@ -16,7 +16,8 @@ import {
   type QualificationRecord,
 } from "../../scripts/classifier-gate";
 import { REPEAT_COUNT } from "../../scripts/qualification/core";
-import { assertDevelopmentGate, writeMachineReleaseAggregate } from "../../scripts/qualification/machine-release";
+import { buildRehearsalCorpus } from "../../scripts/qualification/rehearsal";
+import { assertDevelopmentGate, scoreMachineRun, writeMachineReleaseAggregate, type MachineAggregate } from "../../scripts/qualification/machine-release";
 
 const AUTHORED_AT = "2026-08-26T14:40:00.000Z";
 const LATER_AT = "2026-08-27T09:15:00.000Z";
@@ -69,6 +70,26 @@ function withTempRoot(body: (root: string) => void): void {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+async function aggregateFixture(generatedAt: string, fail = false): Promise<MachineAggregate> {
+  const candidate = createFrozenCandidateManifest(AUTHORED_AT);
+  const corpus = await buildRehearsalCorpus({
+    candidateManifestHash: candidate.manifestHash,
+    classifierModel: candidate.candidate.modelProfile.model,
+    authoredAt: AUTHORED_AT,
+  });
+  const results = corpus.release.flatMap((fixture) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({
+    fixtureID: fixture.id,
+    repeat: index + 1,
+    decision: fail && fixture.category === "dangerous" && fixture.route === "reviewer" ? "allow" : fixture.expectedDecision,
+    route: fixture.route,
+    providerAttempted: fixture.route === "reviewer",
+    terminalKind: fixture.route === "reviewer" ? "valid_model" as const : "manual" as const,
+    valid: true,
+    latencyMs: 1,
+  })));
+  return scoreMachineRun({ corpus, results, corpusDigest: "c".repeat(64), custodyNumber: 1, generatedAt, executionMode: "live" });
 }
 
 describe("artifact archive", () => {
@@ -200,18 +221,25 @@ describe("artifact archive", () => {
     const root = mkdtempSync(join(tmpdir(), "artifact-archive-aggregate-"));
     try {
       const path = join(root, "machine-release-aggregate.json");
-      const hash = "c".repeat(64);
       // The corpus a release draw consumes is one-use, so the aggregate is the
       // only evidence that draw will ever produce. Overwriting it is
       // unrecoverable in a way an ordinary report is not.
-      await writeMachineReleaseAggregate(path, { generatedAt: AUTHORED_AT, candidateManifestHash: hash, terminal: "machine-release-fail" });
+      const first = await aggregateFixture(AUTHORED_AT, true);
+      const second = await aggregateFixture(LATER_AT);
+      expect(first.candidateManifestHash).toBe(second.candidateManifestHash);
+      await writeMachineReleaseAggregate(path, first);
+      const predecessorBytes = readFileSync(path, "utf8");
       expect(existsSync(archiveDirectoryFor(path))).toBe(false);
-      await writeMachineReleaseAggregate(path, { generatedAt: LATER_AT, candidateManifestHash: hash, terminal: "machine-release-pass" });
+      await expect(writeMachineReleaseAggregate(path, { generatedAt: AUTHORED_AT, candidateManifestHash: first.candidateManifestHash, terminal: "machine-release-fail" }))
+        .rejects.toThrow(/schema version/);
+      expect(readFileSync(path, "utf8")).toBe(predecessorBytes);
+      expect(existsSync(archiveDirectoryFor(path))).toBe(false);
+      await writeMachineReleaseAggregate(path, second);
 
       const archives = readdirSync(archiveDirectoryFor(path));
-      expect(archives).toEqual([`machine-release-aggregate-20260826T144000Z-${hash.slice(0, 12)}.json`]);
-      expect((JSON.parse(readFileSync(join(archiveDirectoryFor(path), archives[0] ?? ""), "utf8")) as { terminal: string }).terminal).toBe("machine-release-fail");
-      expect((JSON.parse(readFileSync(path, "utf8")) as { terminal: string }).terminal).toBe("machine-release-pass");
+      expect(archives).toEqual([`machine-release-aggregate-20260826T144000Z-${first.candidateManifestHash.slice(0, 12)}.json`]);
+      expect((JSON.parse(readFileSync(join(archiveDirectoryFor(path), archives[0] ?? ""), "utf8")) as MachineAggregate).terminal).toBe("machine-release-fail");
+      expect((JSON.parse(readFileSync(path, "utf8")) as MachineAggregate).terminal).toBe("machine-release-pass");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

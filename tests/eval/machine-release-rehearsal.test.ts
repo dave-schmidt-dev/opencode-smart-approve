@@ -27,15 +27,19 @@ import {
 import {
   CONSECUTIVE_TRANSPORT_FAILURE_LIMIT,
   MACHINE_AGGREGATE_SCHEMA,
+  MACHINE_OBSERVATIONS_SCHEMA,
   MACHINE_REHEARSAL_SCHEMA,
   MACHINE_THRESHOLDS,
   MachineDrawAbortedError,
   assertAggregateDestination,
   machineAbortRecordPath,
+  machineObservationEvidencePath,
   normalizeMachineTerminalKind,
   runBlindedDraw,
   runMachineRelease,
   runMachineReleasePreflight,
+  scoreMachineRun,
+  validateMachineReleaseAggregate,
   writeMachineReleaseAggregate,
   type MachineAggregate,
 } from "../../scripts/qualification/machine-release";
@@ -131,6 +135,7 @@ async function rehearse(input: {
   readonly label: string;
   readonly corpus: MachineReleaseCorpus;
   readonly script: RehearsalScript;
+  readonly mutatePrivateCorpus?: (path: string) => void;
   readonly exitAfterCalls?: number;
   readonly probeProvider?: () => Promise<void>;
   readonly aggregateName?: string;
@@ -143,6 +148,7 @@ async function rehearse(input: {
     developmentReport: gate.report,
     candidateManifestHash: gate.candidate.manifestHash,
   });
+  input.mutatePrivateCorpus?.(artifacts.corpusPath);
   const aggregatePath = input.aggregateName ? join(root, input.aggregateName) : artifacts.aggregatePath;
   const transport = createScriptedTransport({
     script: input.script,
@@ -313,6 +319,33 @@ describe("preflight clears a draw without spending it", () => {
   });
 });
 
+describe("a post-spend corpus rejection leaves durable evidence", () => {
+  test("writes a sanitized abort record before rethrowing", async () => {
+    const corpus = await corpusPromise;
+    const outcome = await rehearse({
+      label: "post-spend-corpus-rejection",
+      corpus,
+      script: agreeableScript(corpus),
+      // The pre-spend path checks only the public digest companion. This
+      // mutation therefore survives until the private corpus is opened after
+      // custody is spent and deterministically provokes the rejection.
+      mutatePrivateCorpus: (path) => appendFileSync(path, " "),
+    });
+    expect(outcome.error).toBeInstanceOf(Error);
+    expect((outcome.error as Error).message).toMatch(/digest does not match/);
+    expect(readCustodyLedger(outcome.artifacts.ledgerPath).state).toBe("spent");
+    expect(existsSync(outcome.artifacts.aggregatePath)).toBe(false);
+    const record = JSON.parse(readFileSync(machineAbortRecordPath(outcome.artifacts.aggregatePath), "utf8")) as Record<string, unknown>;
+    expect(record.terminal).toBe("machine-release-aborted");
+    expect(record.reason).toBe("post-spend corpus rejection: digest mismatch");
+    expect(record.corpusVersion).toBe("unread: corpus rejected before parsing completed");
+    expect(record.reviewerRoutedFixtures).toBe(0);
+    expect(JSON.stringify(record)).not.toContain("digest does not match");
+    // Mutation contract: removing the catch/write above leaves only the spent
+    // ledger, so this assertion fails instead of silently accepting the loss.
+  }, 120_000);
+});
+
 describe("a clean rehearsal scores as a pass", () => {
   test("writes a rehearsal artifact, spends custody once, and reaches every fixture", async () => {
     const corpus = await corpusPromise;
@@ -336,6 +369,7 @@ describe("a clean rehearsal scores as a pass", () => {
     expect(aggregate.schemaVersion).toBe(MACHINE_REHEARSAL_SCHEMA);
     expect(aggregate.schemaVersion).not.toBe(MACHINE_AGGREGATE_SCHEMA);
     const written = JSON.parse(readFileSync(outcome.artifacts.aggregatePath, "utf8")) as MachineAggregate;
+    expect(validateMachineReleaseAggregate(written)).toEqual(written);
     expect(written.executionMode).toBe("rehearsal");
     expect(written.terminal).toBe("machine-release-pass");
 
@@ -345,6 +379,47 @@ describe("a clean rehearsal scores as a pass", () => {
     expect(outcome.calls.length).toBe(reviewerRouted(corpus).length * REPEAT_COUNT);
     expect(existsSync(machineAbortRecordPath(outcome.artifacts.aggregatePath))).toBe(false);
   }, 120_000);
+});
+
+describe("machine release aggregate schemas", () => {
+  async function validAggregate(executionMode: "live" | "rehearsal"): Promise<MachineAggregate> {
+    const corpus = await corpusPromise;
+    return scoreMachineRun({
+      corpus,
+      results: corpus.release.flatMap((fixture) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({
+        fixtureID: fixture.id,
+        repeat: index + 1,
+        decision: fixture.expectedDecision,
+        route: fixture.route,
+        providerAttempted: fixture.route === "reviewer",
+        terminalKind: fixture.route === "reviewer" ? "valid_model" as const : "manual" as const,
+        valid: true,
+        latencyMs: 1,
+      }))),
+      corpusDigest: "a".repeat(64),
+      custodyNumber: 1,
+      generatedAt: AUTHORED_AT,
+      executionMode,
+    });
+  }
+
+  test("accepts legacy v2 fault omission and normalizes it", async () => {
+    const aggregate = await validAggregate("live");
+    const { transportFaults: _transportFaults, ...legacy } = aggregate;
+    const normalized = validateMachineReleaseAggregate({ ...legacy, schemaVersion: "classifier-eval/machine-release-aggregate/v2" });
+    expect(normalized.transportFaults).toEqual([]);
+    expect(validateMachineReleaseAggregate({ ...aggregate, schemaVersion: "classifier-eval/machine-release-aggregate/v2" }).transportFaults).toEqual([]);
+  });
+
+  test("rejects aggregate key mutations instead of silently accepting them", async () => {
+    const aggregate = await validAggregate("rehearsal");
+    expect(validateMachineReleaseAggregate(aggregate)).toEqual(aggregate);
+    expect(() => validateMachineReleaseAggregate({ ...aggregate, extra: true })).toThrow(/unknown field extra/);
+    const { providerCalls: _providerCalls, ...missing } = aggregate;
+    expect(() => validateMachineReleaseAggregate(missing)).toThrow(/missing providerCalls/);
+    expect(() => validateMachineReleaseAggregate({ ...aggregate, thresholds: { ...aggregate.thresholds, p95LimitMs: 1 } })).toThrow(/thresholds/);
+    expect(() => validateMachineReleaseAggregate({ ...aggregate, transportFaults: [{ phase: "session.prompt", name: "Error", status: null, code: null, count: 1, renamed: true }] })).toThrow(/unknown field renamed/);
+  });
 });
 
 describe("a rehearsal that answers badly scores as a fail", () => {
@@ -364,6 +439,12 @@ describe("a rehearsal that answers badly scores as a fail", () => {
     // Still a rehearsal, and still not a claim about the classifier.
     expect(aggregate.executionMode).toBe("rehearsal");
     expect(aggregate.invalidRuns).toBe(0);
+    const evidencePath = machineObservationEvidencePath(outcome.artifacts.aggregatePath);
+    const evidence = JSON.parse(readFileSync(evidencePath, "utf8")) as { schemaVersion: string; observations: readonly Record<string, unknown>[] };
+    expect(evidence.schemaVersion).toBe(MACHINE_OBSERVATIONS_SCHEMA);
+    expect(evidence.observations).toHaveLength(reviewerRouted(corpus).length * REPEAT_COUNT);
+    expect(evidence.observations.filter((entry) => entry.fixtureID === target.id && entry.observedDecision === "allow")).toHaveLength(REPEAT_COUNT);
+    expect(JSON.stringify(evidence)).not.toContain(target.command);
   }, 120_000);
 
   test("unparseable answers are invalid runs, not decisions", async () => {
@@ -387,6 +468,10 @@ describe("a rehearsal that answers badly scores as a fail", () => {
     expect(aggregate.failures).toContain(`invalid runs: ${REPEAT_COUNT * 2}`);
     expect(aggregate.terminalKindCounts.malformed).toBe(REPEAT_COUNT);
     expect(aggregate.terminalKindCounts.tool_violation).toBe(REPEAT_COUNT);
+    const evidence = JSON.parse(readFileSync(machineObservationEvidencePath(outcome.artifacts.aggregatePath), "utf8")) as { observations: readonly Record<string, unknown>[] };
+    expect(evidence.observations.filter((entry) => entry.fixtureID === malformedFixture.id && entry.terminalKind === "malformed")).toHaveLength(REPEAT_COUNT);
+    expect(evidence.observations.filter((entry) => entry.fixtureID === toolFixture.id && entry.terminalKind === "tool_violation")).toHaveLength(REPEAT_COUNT);
+    expect(evidence.observations.some((entry) => Object.hasOwn(entry, "decision"))).toBe(false);
   }, 120_000);
 });
 

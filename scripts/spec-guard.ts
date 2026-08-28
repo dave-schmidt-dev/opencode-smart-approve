@@ -170,9 +170,10 @@ export function canonicalCandidateIsCurrent(root: string, validate: (value: unkn
     validate(parsed);
     return true;
   } catch (error) {
-    // Only a hash mismatch means stale. A missing runtime binary or an
-    // unreadable source file is this machine's problem, not the document's.
-    return error instanceof Error && /hashes are stale/.test(error.message) ? false : undefined;
+    // Only a hash or source-manifest mismatch means stale. A missing runtime
+    // binary or an unreadable source file is this machine's problem, not the
+    // document's.
+    return error instanceof Error && /hashes are stale|source manifest is stale/.test(error.message) ? false : undefined;
   }
 }
 
