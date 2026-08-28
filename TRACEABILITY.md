@@ -79,10 +79,10 @@ The release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`; it is `release-disabled` on
 classifier evidence, not on authorship — the 2026-08-14 owner decision under
 INV-9 accepts a `machine-adjudicated` corpus, and the 2026-08-28 draw at custody
-consumption 4 — the first of four to complete, with all 320 provider calls
-landing and one transport fault — returned `machine-release-fail` on 36/200
-benign false manuals and 12/47 ambiguous approvals, with 0/70 critical false
-approvals.
+consumption 4 — the first whose result is about the classifier rather than an
+outage — returned `machine-release-fail` on 36/200 benign false manuals, 12/47
+ambiguous approvals and 3 invalid runs, with 0/70 critical false approvals. Of
+320 attempted provider calls 317 returned a model answer and 3 timed out.
 
 ## INV-7 runner evidence
 

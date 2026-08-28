@@ -10,8 +10,11 @@
  *      only an id and a command. The expected decision cannot reach the model
  *      because it is not in the type that crosses the boundary. Labels rejoin
  *      by id after the reviewer has answered.
- *   2. Custody. The ledger is spent before the private corpus is opened, so an
- *      interrupted or repeated run cannot quietly re-consume the same corpus.
+ *   2. Custody. A draw spends the ledger before it opens the private corpus, so
+ *      an interrupted or repeated run cannot quietly re-consume the same
+ *      corpus. `--preflight` is the one path that reads the corpus without
+ *      spending: it validates and discards, writes nothing, and emits only
+ *      counts and fixture-level structure, never command bytes.
  *
  * Only an aggregate is written. Per-fixture commands, labels, and responses
  * stay in memory.
@@ -90,12 +93,14 @@ const SERVER_LOG_DIR = join(PROJECT_ROOT, ".logs");
 const PROVIDER_PROBE_COMMAND = "echo smart-approve-provider-probe";
 
 /**
- * How many consecutive reviewer-routed jobs may fail to create a session before
- * the draw stops.
+ * How many consecutive reviewer-routed jobs may fail at the transport before
+ * the draw stops. Counts `provider_error` as well as `session_create_error`:
+ * which label an outage receives depends only on whether the transport threw or
+ * rejected, so counting one and not the other misses half the outages.
  *
- * Set low on purpose. Once the server is unreachable every remaining job
- * becomes an invalid run, and the scorer cannot tell that sample apart from a
- * classifier answering badly: the v4 aggregate reported `machine-release-fail`
+ * Once the server is unreachable every remaining job becomes an invalid run,
+ * and the scorer cannot tell that sample apart from a classifier answering
+ * badly: the v4 aggregate reported `machine-release-fail`
  * with three named failures, all of which were artifacts of the loss rather
  * than findings about the classifier. Aborting cannot un-spend custody -- the
  * ledger is spent before the corpus is opened, by design -- but it stops a run
@@ -308,7 +313,14 @@ export interface MachineObservation {
  * being read later as evidence about the classifier -- the same confusion the
  * abort record exists to prevent for an outage.
  */
-export const MACHINE_AGGREGATE_SCHEMA = "classifier-eval/machine-release-aggregate/v2";
+/**
+ * Bumped to v3 when `transportFaults` became a required field. A v2 aggregate
+ * may or may not carry it -- `machine-release-aggregate-v4d.json` is labelled
+ * v2 and does, because the field was added in the same session that produced
+ * it -- so v2 cannot be parsed as this type without defaulting the field. v3
+ * onwards always has it.
+ */
+export const MACHINE_AGGREGATE_SCHEMA = "classifier-eval/machine-release-aggregate/v3";
 export const MACHINE_REHEARSAL_SCHEMA = "classifier-eval/machine-release-rehearsal/v1";
 
 /**
@@ -663,15 +675,6 @@ export async function probeProviderHealth(input: {
  * The reviewer never receives a category or an expected decision: the only
  * values crossing this boundary are `BlindedFixture` ids and command text.
  */
-/**
- * Everything the draw needs from a running provider, and nothing more.
- *
- * The default implementation boots a real `opencode serve`. A rehearsal
- * supplies a scripted client instead, which is the only seam in the release
- * path that a live model call sits behind -- the reviewer agent, the prompt it
- * builds, the schema it parses, the terminal-kind mapping, the abort guards and
- * the scoring are all the shipped code either way.
- */
 /** One finished invocation, before labels are joined back on for scoring. */
 export interface DrawResult {
   readonly fixtureID: string;
@@ -690,12 +693,30 @@ export interface DrawResult {
  * The faults travel with the results rather than only with an abort, so a draw
  * that degrades without tripping `CONSECUTIVE_TRANSPORT_FAILURE_LIMIT` still
  * puts its causes on the record.
+ *
+ * They do not reconcile one-to-one with `terminalKindCounts`, and must not be
+ * read as if they did. `src/reviewer/agent.ts` races `session.prompt` against a
+ * timeout; when the timeout wins, the observation is recorded as `timeout` and
+ * the abandoned prompt may still reject afterwards, at which point
+ * `instrumentTransport` records a fault that decided nothing. The v4d draw is
+ * exactly this case: `timeout: 3`, `provider_error: 0`, and one `session.prompt`
+ * `ECONNRESET` that no observation's outcome can be attributed to. Faults are
+ * evidence about the transport, not a second tally of the runs.
  */
 export interface BlindedDrawOutcome {
   readonly results: readonly DrawResult[];
   readonly transportFaults: readonly TransportFault[];
 }
 
+/**
+ * Everything the draw needs from a running provider, and nothing more.
+ *
+ * The default implementation boots a real `opencode serve`. A rehearsal
+ * supplies a scripted client instead, which is the only seam in the release
+ * path that a live model call sits behind -- the reviewer agent, the prompt it
+ * builds, the schema it parses, the terminal-kind mapping, the abort guards and
+ * the scoring are all the shipped code either way.
+ */
 export interface DrawTransport {
   readonly client: ReviewerSessionClient;
   /** Where a reader should look for diagnostics when this draw aborts. */
@@ -791,7 +812,12 @@ export async function runBlindedDraw(input: {
     // exactly the v4 failure, where an outage was written up as three
     // classifier findings.
     if (aborted) throw aborted;
-    return { results, transportFaults };
+    // Snapshotted, not handed on by reference. `instrumentTransport` is still
+  // pushing into the live array: the reviewer races `session.prompt` against a
+  // timeout, so an abandoned prompt can reject and append a fault after its
+  // observation was already recorded. Copying here at least makes the scored
+  // value stable rather than dependent on when the scorer happened to read it.
+  return { results, transportFaults: [...transportFaults] };
   } finally {
     clearInterval(progress);
     await reviewer.dispose().catch(() => undefined);
@@ -1193,6 +1219,23 @@ export interface MachineReleasePreflightReport {
   readonly fixtures: number;
   readonly reviewerRoutedFixtures: number;
   readonly ledgerExists: boolean;
+  /**
+   * Existence alone was not enough to support the claim this check makes. A
+   * ledger that is already `spent` clears a preflight and then stops the draw
+   * at `spendBeforePrivateInput`, after it has booted a server and made a real
+   * probe call -- no custody lost, but not "only the transport can still lose
+   * this run" either. `unreadable` covers a ledger present but malformed.
+   */
+  readonly ledgerState: "absent" | "available" | "reserved" | "spent" | "unreadable";
+}
+
+/** Read a ledger's state without letting a malformed one fail the preflight. */
+function readLedgerState(path: string): "available" | "reserved" | "spent" | "unreadable" {
+  try {
+    return readCustodyLedger(path).state;
+  } catch {
+    return "unreadable";
+  }
 }
 
 /**
@@ -1217,6 +1260,11 @@ export async function runMachineReleasePreflight(options: MachineReleasePrefligh
   const corpus = await openReleaseCorpus(corpusPath, digestCompanion, candidate);
   const reviewerRoutedFixtures = corpus.release.filter((fixture) => fixture.route === "reviewer").length;
   onStatus(`corpus ${corpus.corpusVersion}: ${corpus.release.length} fixtures, ${reviewerRoutedFixtures} reviewer-routed, routes observed`);
+  const ledgerExists = existsSync(resolve(options.ledgerPath));
+  const ledgerState = ledgerExists ? readLedgerState(options.ledgerPath) : "absent";
+  onStatus(ledgerState === "absent" || ledgerState === "available"
+    ? `ledger: ${ledgerState}`
+    : `ledger: ${ledgerState} -- a draw against this path will stop at the spend, after booting a server and probing the provider`);
   return {
     preflight: "ok",
     executionMode,
@@ -1225,7 +1273,8 @@ export async function runMachineReleasePreflight(options: MachineReleasePrefligh
     corpusDigest: digestCompanion,
     fixtures: corpus.release.length,
     reviewerRoutedFixtures,
-    ledgerExists: existsSync(resolve(options.ledgerPath)),
+    ledgerExists,
+    ledgerState,
   };
 }
 
@@ -1425,10 +1474,12 @@ export async function main(rawArgv = process.argv.slice(2)): Promise<number> {
     console.error("usage: machine-release.ts [--candidate <manifest>] [--development-report <report>] [--preflight] <corpus> <ledger> <aggregate> <iso-timestamp> [prior-consumptions-json]");
     return 1;
   }
-  // Declaring a prior consumption is a disclosure, not a bypass: it raises this
-  // run's recorded consumption number and stamps the reason into the aggregate.
-  const priorConsumptions = argv[4] ? JSON.parse(argv[4]) as readonly { consumptionNumber: number; reason: string }[] : undefined;
   try {
+    // Declaring a prior consumption is a disclosure, not a bypass: it raises
+    // this run's recorded consumption number and stamps the reason into the
+    // aggregate. Parsed inside the try so a malformed argument is reported like
+    // every other failure rather than rejecting out of `main` as a stack trace.
+    const priorConsumptions = argv[4] ? JSON.parse(argv[4]) as readonly { consumptionNumber: number; reason: string }[] : undefined;
     const aggregate = await runMachineRelease({ corpusPath, ledgerPath, aggregatePath, generatedAt, priorConsumptions, candidatePath, developmentReportPath, onStatus: (message) => console.error(`[machine-release] ${message}`) });
     console.log(JSON.stringify({ terminal: aggregate.terminal, custodyNumber: aggregate.custodyNumber, observations: aggregate.observations, providerCalls: aggregate.providerCalls, criticalFalseApprovals: `${aggregate.criticalFalseApprovals}/${aggregate.criticalDenominator}`, benignFalseManual: `${aggregate.benignFalseManual}/${aggregate.benignDenominator}`, p95LatencyMs: aggregate.p95LatencyMs, failures: aggregate.failures }, null, 2));
     return aggregate.terminal === "machine-release-pass" ? 0 : 2;

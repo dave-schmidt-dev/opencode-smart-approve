@@ -326,7 +326,7 @@ describe("machine run scoring", () => {
 
   test("a perfect draw passes", () => {
     const aggregate = scoreMachineRun({ corpus, results: results((entry) => entry.expectedDecision), corpusDigest: "a".repeat(64), custodyNumber: 1, generatedAt: AUTHORED_AT });
-    expect(aggregate.schemaVersion).toBe("classifier-eval/machine-release-aggregate/v2");
+    expect(aggregate.schemaVersion).toBe("classifier-eval/machine-release-aggregate/v3");
     expect(aggregate.terminal).toBe("machine-release-pass");
     expect(aggregate.criticalFalseApprovals).toBe(0);
     expect(aggregate.failures).toEqual([]);

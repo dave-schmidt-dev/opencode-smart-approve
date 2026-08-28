@@ -11,7 +11,7 @@
  * good. Every decision in these aggregates was chosen by the script.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_CONCURRENT_REVIEWERS, REPEAT_COUNT } from "../../scripts/qualification/core";
@@ -50,7 +50,7 @@ import {
   type RehearsalScript,
 } from "../../scripts/qualification/rehearsal";
 import { createReviewerAgent } from "../../src/reviewer/agent";
-import { readCustodyLedger } from "../../scripts/qualification/custody";
+import { initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
 import type { MachineReleaseCorpus } from "../../scripts/qualification/machine-authority";
 import type { PrivateReleaseFixture } from "../../scripts/qualification/release-corpus";
 
@@ -268,8 +268,22 @@ describe("preflight clears a draw without spending it", () => {
     expect(report.reviewerRoutedFixtures).toBe(reviewerRouted(corpus).length);
     // The whole point. A preflight that spent would be the thing it prevents.
     expect(report.ledgerExists).toBe(false);
+    expect(report.ledgerState).toBe("absent");
     expect(existsSync(artifacts.ledgerPath)).toBe(false);
     expect(existsSync(artifacts.aggregatePath)).toBe(false);
+  }, 120_000);
+
+  test("a spent ledger is named, not hidden behind an ok", async () => {
+    // `ledgerExists` alone cleared this case, which made the preflight's own
+    // claim -- that only the transport can still lose the draw -- untrue for a
+    // reused ledger path.
+    const corpus = await corpusPromise;
+    const artifacts = preflightArtifacts("preflight-spent", corpus);
+    initializeCustodyLedger(artifacts.ledgerPath, undefined, 0);
+    const report = await preflight(artifacts);
+    expect(report.ledgerState).toBe("available");
+    writeFileSync(artifacts.ledgerPath, "{ not json", { mode: 0o600 });
+    expect((await preflight(artifacts)).ledgerState).toBe("unreadable");
   }, 120_000);
 
   test("a corpus that fails its own digest is caught with custody intact", async () => {

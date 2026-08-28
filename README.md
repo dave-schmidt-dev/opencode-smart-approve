@@ -39,25 +39,32 @@ eval-results/frozen-candidate-manifest.json` prints the current freeze and exits
 non-zero once it no longer matches source, and `--validate-development-report
 <report> --candidate <manifest>` reports whether a receipt is still bound to it.
 
-No development draw has been run against the freeze on disk. Whether that
+A development draw ran against the freeze on disk on 2026-08-27 and returned
+`development-pass`: 113 fixtures, 565 invocations, 295 provider calls, 6/275
+benign false manuals, 0 critical false approvals, p95 2.598 s. Whether that
 freeze still matches source is not recorded here: it goes stale the moment any
 file in its source manifest changes, so a verdict written into this document is
-true only until the next commit. Run `--validate-candidate` for the answer. The development report beside it is a
-failed MiMo V2.5 A/B comparison (`stop-disabled` / `invalid_run`, 164 of 475
-runs invalid) bound to an earlier candidate. Earlier development receipts are
+true only until the next commit. Run `--validate-candidate` for the answer, and
+`--validate-development-report` for whether the receipt is still bound to it.
+Earlier development receipts are
 not recoverable: `qualify:development` and `qualify:live` both write the single
 fixed path `eval-results/development-candidate-report.json`, and
 `--freeze-candidate` likewise overwrites one fixed manifest path, so each new
-draw or freeze destroys its predecessor. `eval-results/` is gitignored, so there
-is no second copy. Re-running the development draw against the current freeze is
-the next qualification step.
+draw or freeze destroys its predecessor. `eval-results/` is gitignored and there
+is no second copy, so the failed MiMo V2.5 A/B receipt this section used to
+describe no longer exists on disk.
 
 Release is blocked on classifier evidence, not on authorship. An owner decision
 of 2026-08-14 (INV-9) accepts a `machine-adjudicated` corpus for release so long
 as the artifact honestly names the authority that produced it, so a
 human-authored corpus, an independently bound human adjudicator, and a human
-custodian are no longer preconditions. Two machine-adjudicated release draws
-have been spent, and the most recent returned `machine-release-fail`.
+custodian are no longer preconditions. The v4 release corpus has been consumed
+four times. Three consumptions produced no verdict -- an outage that was scored,
+a run killed by a shell timeout, and an abort on consecutive transport failures
+-- and the fourth, on 2026-08-28, completed all 475 invocations and returned
+`machine-release-fail` on 36/200 benign false manuals and 12/47 ambiguous
+approvals, with 0/70 critical false approvals. That is the current release
+evidence: the safety property held and the usability property did not.
 
 The six identity-specific replan micro-plans are static, disabled-default
 guidance for blocked shell attempts; their presence is not qualification
