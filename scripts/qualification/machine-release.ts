@@ -134,10 +134,81 @@ export function nextSessionFailureStreak(current: number, terminalKind: Terminal
  * other.
  */
 export class MachineDrawAbortedError extends Error {
-  constructor(message: string, readonly serverLogPath: string) {
+  constructor(message: string, readonly serverLogPath: string, readonly transportFaults: readonly TransportFault[] = []) {
     super(`${message} (server diagnostics: ${serverLogPath})`);
     this.name = "MachineDrawAbortedError";
   }
+}
+
+/**
+ * Structural facts about a transport failure, and deliberately nothing else.
+ *
+ * `src/reviewer/agent.ts` collapses every non-parse, non-timeout throw to
+ * `provider_error` and never echoes the error text, because that text can carry
+ * command or secret bytes. That is correct, and it is also why two release
+ * draws died on `session_create_error` with no way to say what failed: the
+ * server log is silent, and the cause is gone by the time the harness sees it.
+ *
+ * This records only fields that cannot carry corpus content -- an error class
+ * name, an HTTP status, an errno-style code -- each admitted by shape rather
+ * than trusted, so a message smuggled into `name` is dropped instead of stored.
+ * The reviewer is untouched, so the frozen candidate is unaffected.
+ */
+export interface TransportFault {
+  readonly phase: "session.create" | "session.prompt";
+  readonly name: string;
+  readonly status: number | null;
+  readonly code: string | null;
+}
+
+const SAFE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const SAFE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+export function describeTransportFault(phase: TransportFault["phase"], error: unknown): TransportFault {
+  const value = error as { name?: unknown; status?: unknown; code?: unknown; response?: { status?: unknown }; cause?: { code?: unknown } };
+  const rawStatus = typeof value?.status === "number" ? value.status : value?.response?.status;
+  const status = typeof rawStatus === "number" && Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599 ? rawStatus : null;
+  const rawCode = typeof value?.cause?.code === "string" ? value.cause.code : value?.code;
+  return {
+    phase,
+    name: typeof value?.name === "string" && SAFE_NAME.test(value.name) ? value.name : "Unknown",
+    status,
+    code: typeof rawCode === "string" && SAFE_CODE.test(rawCode) ? rawCode : null,
+  };
+}
+
+/** Group faults into countable rows, so an abort record names causes not instances. */
+export function summarizeTransportFaults(faults: readonly TransportFault[]): readonly { readonly phase: string; readonly name: string; readonly status: number | null; readonly code: string | null; readonly count: number }[] {
+  const counts = new Map<string, { phase: string; name: string; status: number | null; code: string | null; count: number }>();
+  for (const fault of faults) {
+    const key = `${fault.phase}|${fault.name}|${fault.status ?? ""}|${fault.code ?? ""}`;
+    const existing = counts.get(key);
+    if (existing) existing.count += 1;
+    else counts.set(key, { phase: fault.phase, name: fault.name, status: fault.status, code: fault.code, count: 1 });
+  }
+  return [...counts.values()].sort((a, b) => b.count - a.count);
+}
+
+/**
+ * Wrap the session client so a throw is recorded before the reviewer swallows
+ * it. A pass-through in every other respect: the reviewer sees the same object
+ * shape and the same rejection, so nothing about the draw changes.
+ */
+export function instrumentTransport<T extends { session: Record<string, unknown> }>(client: T, faults: TransportFault[]): T {
+  const session = client.session;
+  const wrap = (phase: TransportFault["phase"], key: string): unknown => {
+    const original = session[key];
+    if (typeof original !== "function") return original;
+    return async (...args: unknown[]): Promise<unknown> => {
+      try {
+        return await (original as (...a: unknown[]) => Promise<unknown>).apply(session, args);
+      } catch (error) {
+        faults.push(describeTransportFault(phase, error));
+        throw error;
+      }
+    };
+  };
+  return { ...client, session: { ...session, create: wrap("session.create", "create"), prompt: wrap("session.prompt", "prompt") } };
 }
 
 function qualificationConfig(profile: ModelProfile): string {
@@ -552,7 +623,12 @@ export async function runBlindedDraw(input: {
   const authPath = assertQualificationRuntime();
 
   const server = await startQualificationServer({ modelProfile: input.modelProfile, label: "draw", authPath });
-  const reviewer = createReviewerAgent({ client: server.client as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: input.modelProfile.model, variant: input.modelProfile.requestedVariant });
+  // Two release draws died on `session_create_error` with the server log silent
+  // and the cause discarded by the reviewer. Capture it here instead, where the
+  // frozen candidate is not at stake.
+  const transportFaults: TransportFault[] = [];
+  const instrumented = instrumentTransport(server.client as unknown as { session: Record<string, unknown> }, transportFaults);
+  const reviewer = createReviewerAgent({ client: instrumented as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: input.modelProfile.model, variant: input.modelProfile.requestedVariant });
 
   const jobs = input.blinded.flatMap((fixture) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({ fixture, repeat: index + 1 })));
   const results = new Array<{ fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }>(jobs.length);
@@ -569,7 +645,7 @@ export async function runBlindedDraw(input: {
         // every remaining fixture into an invalid run.
         if (aborted) return;
         if (server.exited()) {
-          aborted ??= new MachineDrawAbortedError("qualification server exited mid-draw", server.logPath);
+          aborted ??= new MachineDrawAbortedError("qualification server exited mid-draw", server.logPath, transportFaults);
           return;
         }
         const jobIndex = nextJob;
@@ -603,7 +679,7 @@ export async function runBlindedDraw(input: {
           // dead server behind whatever benign commands happened to interleave.
           consecutiveSessionFailures = nextSessionFailureStreak(consecutiveSessionFailures, terminalKind, valid);
           if (consecutiveSessionFailures >= CONSECUTIVE_SESSION_FAILURE_LIMIT) {
-            aborted ??= new MachineDrawAbortedError(`${consecutiveSessionFailures} consecutive reviewer sessions failed to open`, server.logPath);
+            aborted ??= new MachineDrawAbortedError(`${consecutiveSessionFailures} consecutive reviewer sessions failed to open`, server.logPath, transportFaults);
           }
         }
         results[jobIndex] = { fixtureID: job.fixture.id, repeat: job.repeat, decision, route, providerAttempted, terminalKind, valid, latencyMs: performance.now() - started };
@@ -657,6 +733,7 @@ export function writeMachineAbortRecord(aggregatePath: string, input: {
   readonly corpusVersion: string;
   readonly reviewerRoutedFixtures: number;
   readonly generatedAt?: string;
+  readonly transportFaults?: readonly TransportFault[];
 }): string {
   const path = machineAbortRecordPath(aggregatePath);
   archiveExistingArtifact(path);
@@ -671,6 +748,9 @@ export function writeMachineAbortRecord(aggregatePath: string, input: {
     custodyNumber: input.custodyNumber,
     corpusVersion: input.corpusVersion,
     reviewerRoutedFixtures: input.reviewerRoutedFixtures,
+    // Causes, not instances, and structural fields only: an abort record is
+    // written from a private corpus and must never carry command bytes.
+    transportFaults: summarizeTransportFaults(input.transportFaults ?? []),
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     note: "Custody was spent and the draw aborted on an infrastructure failure. This is not a classifier result and must not be scored as one.",
   };
@@ -1014,6 +1094,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
           custodyNumber: spent.consumptionNumber,
           corpusVersion: corpus.corpusVersion,
           reviewerRoutedFixtures: corpus.release.filter((fixture) => fixture.route === "reviewer").length,
+          transportFaults: error.transportFaults,
           generatedAt: options.generatedAt,
         });
         onStatus(`aborted: wrote ${recordPath}`);

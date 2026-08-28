@@ -27,7 +27,7 @@ import {
   type MachineProvenance,
   type MachineReleaseCorpus,
 } from "../../scripts/qualification/machine-authority";
-import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_SESSION_FAILURE_LIMIT, machineAbortRecordPath, MachineDrawAbortedError, nextSessionFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun, SERVER_BOOT_ATTEMPTS, writeMachineAbortRecord } from "../../scripts/qualification/machine-release";
+import { assertCandidateBinding, assertCorpusModelBinding, assertDevelopmentGate, assertQualificationRuntime, CONSECUTIVE_SESSION_FAILURE_LIMIT, describeTransportFault, instrumentTransport, machineAbortRecordPath, MachineDrawAbortedError, nextSessionFailureStreak, normalizeMachineTerminalKind, parseCandidateFlag, REDACTION_EXEMPT_CATEGORIES, runMachineRelease, scoreMachineRun, SERVER_BOOT_ATTEMPTS, summarizeTransportFaults, writeMachineAbortRecord } from "../../scripts/qualification/machine-release";
 import { MODEL_PROFILES } from "../../src/reviewer/model-profile";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { digestPrivateBytes, initializeCustodyLedger, readCustodyLedger } from "../../scripts/qualification/custody";
@@ -1253,6 +1253,88 @@ describe("aborted draws leave durable evidence", () => {
     expect(guarded).toContain("catch (writeError)");
     expect(guarded).not.toContain("throw writeError");
     expect(guarded.indexOf("catch (writeError)")).toBeLessThan(guarded.indexOf("throw error"));
+  });
+});
+
+describe("transport faults are captured without leaking corpus bytes", () => {
+  // The whole reason the reviewer discards error text: it can quote the command.
+  const SECRET = "rm -rf /srv//*; export AWS_SECRET_ACCESS_KEY=hunter2";
+
+  test("only structural fields survive; message text never does", () => {
+    const error = Object.assign(new Error(`request failed for ${SECRET}`), { name: "TypeError", status: 503, cause: { code: "ECONNRESET" } });
+    const fault = describeTransportFault("session.create", error);
+    expect(fault).toEqual({ phase: "session.create", name: "TypeError", status: 503, code: "ECONNRESET" });
+    expect(JSON.stringify(fault)).not.toContain("hunter2");
+    expect(JSON.stringify(fault)).not.toContain("rm -rf");
+  });
+
+  test("a name or code carrying free text is dropped, not stored", () => {
+    // Admitted by shape rather than trusted: an error whose `name` is really a
+    // message must not become a hole the command escapes through.
+    const fault = describeTransportFault("session.prompt", { name: `failed: ${SECRET}`, code: `weird ${SECRET}`, status: 999 });
+    expect(fault.name).toBe("Unknown");
+    expect(fault.code).toBeNull();
+    // 999 is not an HTTP status, so it is not recorded as one.
+    expect(fault.status).toBeNull();
+    expect(JSON.stringify(fault)).not.toContain("hunter2");
+  });
+
+  test("the wrapper records the throw and re-raises it unchanged", async () => {
+    const faults: Parameters<typeof summarizeTransportFaults>[0] extends readonly (infer F)[] ? F[] : never = [];
+    const thrown = Object.assign(new Error("boom"), { name: "HTTPError", status: 429 });
+    const client = instrumentTransport({ session: {
+      create: async () => { throw thrown; },
+      prompt: async () => ({ ok: true }),
+      delete: async () => ({ deleted: true }),
+    } }, faults);
+    await expect((client.session.create as () => Promise<unknown>)()).rejects.toBe(thrown);
+    expect(faults).toHaveLength(1);
+    expect(faults[0]).toEqual({ phase: "session.create", name: "HTTPError", status: 429, code: null });
+    // Pass-through: a success is untouched, and unwrapped methods still exist.
+    expect(await (client.session.prompt as () => Promise<unknown>)()).toEqual({ ok: true });
+    expect(await (client.session.delete as () => Promise<unknown>)()).toEqual({ deleted: true });
+    expect(faults).toHaveLength(1);
+  });
+
+  test("faults are reported as counted causes, most frequent first", () => {
+    const rows = summarizeTransportFaults([
+      { phase: "session.create", name: "HTTPError", status: 429, code: null },
+      { phase: "session.create", name: "HTTPError", status: 429, code: null },
+      { phase: "session.prompt", name: "TypeError", status: null, code: "ECONNRESET" },
+      { phase: "session.create", name: "HTTPError", status: 429, code: null },
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual({ phase: "session.create", name: "HTTPError", status: 429, code: null, count: 3 });
+    expect(rows[1]?.count).toBe(1);
+  });
+
+  test("an abort record carries the causes, so the next draw is not blind", () => {
+    const directory = mkdtempSync(join(tmpdir(), "smart-approve-abort-faults-"));
+    const written = writeMachineAbortRecord(join(directory, "machine-release-aggregate-vZ.json"), {
+      reason: "3 consecutive reviewer sessions failed to open",
+      serverLogPath: "/x/y.log",
+      candidateManifestHash: "a".repeat(64), corpusDigest: "b".repeat(64),
+      custodyNumber: 4, corpusVersion: "2026-08-27-release-v4", reviewerRoutedFixtures: 64,
+      transportFaults: [
+        { phase: "session.create", name: "HTTPError", status: 429, code: null },
+        { phase: "session.create", name: "HTTPError", status: 429, code: null },
+      ],
+    });
+    const record = JSON.parse(readFileSync(written, "utf8")) as { transportFaults: { count: number; status: number }[] };
+    expect(record.transportFaults).toHaveLength(1);
+    expect(record.transportFaults[0]?.count).toBe(2);
+    expect(record.transportFaults[0]?.status).toBe(429);
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("the draw instruments the client it hands the reviewer", () => {
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    const draw = source.slice(source.indexOf("export async function runBlindedDraw"), source.indexOf("/** Join blinded results back to labels"));
+    expect(draw).toContain("instrumentTransport(server.client");
+    // The reviewer must receive the wrapped client, not the bare one.
+    expect(draw).toContain("createReviewerAgent({ client: instrumented");
+    // Both abort paths carry the faults, or the record explains nothing.
+    expect(draw.match(/new MachineDrawAbortedError\([^)]*transportFaults\)/g) ?? []).toHaveLength(2);
   });
 });
 
