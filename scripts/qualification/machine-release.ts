@@ -362,6 +362,31 @@ interface QualificationServer {
  * the old one. The per-attempt budget is a third of the former single-attempt
  * budget, so three attempts cost no more wall-clock than one used to.
  */
+/** Signals that end a run without unwinding, so no `catch` can see them. */
+export const ABORT_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/**
+ * Qualification servers that are currently running.
+ *
+ * A draw killed by a signal never reaches `dispose`, which orphans both the
+ * `opencode serve` child and its temp root -- observed after consumption 2 was
+ * killed by a shell timeout. Registered on a successful boot and cleared on
+ * dispose, so this is empty for any run that ends normally.
+ */
+const liveServers = new Set<{ readonly child: { kill: (signal: NodeJS.Signals) => void }; readonly runtimeRoot: string; readonly logPath: string }>();
+
+/** Best-effort teardown that is safe to call from a signal handler: no awaits. */
+export function reapLiveServers(): string | undefined {
+  let logPath: string | undefined;
+  for (const entry of liveServers) {
+    logPath ??= entry.logPath;
+    try { entry.child.kill("SIGKILL"); } catch { /* already gone */ }
+    try { rmSync(entry.runtimeRoot, { recursive: true, force: true }); } catch { /* nothing to remove */ }
+  }
+  liveServers.clear();
+  return logPath;
+}
+
 async function startQualificationServer(input: {
   readonly modelProfile: ModelProfile;
   readonly label: string;
@@ -413,12 +438,15 @@ async function startQualificationServer(input: {
       continue;
     }
 
+    const registration = { child, runtimeRoot, logPath };
+    liveServers.add(registration);
     return {
       baseUrl,
       client: createOpencodeClient({ baseUrl, directory: PROJECT_ROOT }),
       logPath,
       exited: () => child.exitCode !== null,
       dispose: async () => {
+        liveServers.delete(registration);
         await stop(child);
         // Closed after the child is gone so nothing writes into a closed
         // descriptor during shutdown.
@@ -650,6 +678,62 @@ export function writeMachineAbortRecord(aggregatePath: string, input: {
   return path;
 }
 
+/**
+ * Write an abort record if this process is killed after custody is spent.
+ *
+ * Returns a disarm function; call it once the run has an aggregate, so a
+ * normally-finished process does not leave handlers behind.
+ *
+ * This covers the gap the `MachineDrawAbortedError` guard cannot: a signal
+ * unwinds nothing, so no `catch` runs, and the corpus is left consumed with
+ * only a ledger entry to show for it. Consumption 2 of the v4 corpus was lost
+ * exactly this way, killed by a shell timeout partway through the draw.
+ */
+export function armCustodySignalGuard(input: {
+  readonly aggregatePath: string;
+  readonly candidateManifestHash: string;
+  readonly corpusDigest: string;
+  readonly custodyNumber: number;
+  readonly generatedAt?: string;
+  readonly corpusFacts: () => { readonly corpusVersion: string; readonly reviewerRoutedFixtures: number } | undefined;
+  readonly onStatus: (message: string) => void;
+}): () => void {
+  const armed = new Map<NodeJS.Signals, () => void>();
+  const disarm = (): void => {
+    for (const [signal, handler] of armed) process.off(signal, handler);
+    armed.clear();
+  };
+  for (const signal of ABORT_SIGNALS) {
+    const handler = (): void => {
+      // Disarm first, so a second signal reaches the default disposition
+      // instead of re-entering a handler that is already writing.
+      disarm();
+      const facts = input.corpusFacts();
+      const serverLogPath = reapLiveServers() ?? SERVER_LOG_DIR;
+      try {
+        const recordPath = writeMachineAbortRecord(input.aggregatePath, {
+          reason: `draw killed by ${signal} after custody was spent`,
+          serverLogPath,
+          candidateManifestHash: input.candidateManifestHash,
+          corpusDigest: input.corpusDigest,
+          custodyNumber: input.custodyNumber,
+          corpusVersion: facts?.corpusVersion ?? "unread: the signal arrived before the corpus was parsed",
+          reviewerRoutedFixtures: facts?.reviewerRoutedFixtures ?? 0,
+          generatedAt: input.generatedAt,
+        });
+        input.onStatus(`aborted: wrote ${recordPath}`);
+      } catch (writeError) {
+        input.onStatus(`aborted: could not write the abort record (${writeError instanceof Error ? writeError.message : String(writeError)}); server log is ${serverLogPath}`);
+      }
+      // Re-raise so the exit status is the signal's, not a substituted code.
+      process.kill(process.pid, signal);
+    };
+    armed.set(signal, handler);
+    process.on(signal, handler);
+  }
+  return disarm;
+}
+
 export async function writeMachineReleaseAggregate(
   path: string,
   aggregate: unknown,
@@ -858,6 +942,33 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const spent = spendBeforePrivateInput(options.ledgerPath, commitment);
   onStatus(`custody: spent (consumption ${spent.consumptionNumber})`);
 
+  // A signal between the spend and the aggregate write leaves custody consumed
+  // with nothing to explain it. That is not hypothetical: consumption 2 of this
+  // corpus was killed by a two-minute shell timeout at 103 of 475 invocations
+  // and left a spent ledger, an orphaned server and no record. The `catch`
+  // below cannot see a signal, so arm the guard here -- and only here, after
+  // the spend, because before it there is no custody to explain.
+  //
+  // The corpus is not read yet, so its facts are supplied through a getter and
+  // reported as unread until the parse fills them in, rather than guessed.
+  let corpusFacts: { readonly corpusVersion: string; readonly reviewerRoutedFixtures: number } | undefined;
+  const disarmSignals = armCustodySignalGuard({
+    aggregatePath: options.aggregatePath,
+    candidateManifestHash: candidate.manifestHash,
+    corpusDigest: digestCompanion,
+    custodyNumber: spent.consumptionNumber,
+    generatedAt: options.generatedAt,
+    corpusFacts: () => corpusFacts,
+    onStatus,
+  });
+
+  try {
+    return await drawAndScore();
+  } finally {
+    disarmSignals();
+  }
+
+  async function drawAndScore(): Promise<MachineAggregate> {
   const corpusBytes = readFileSync(corpusPath, "utf8");
   if (digestPrivateBytes(corpusBytes) !== digestCompanion) throw new Error("machine release corpus digest does not match its public companion");
   const corpus = JSON.parse(corpusBytes) as MachineReleaseCorpus;
@@ -879,6 +990,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // Only reviewer-routed fixtures reach the model. Secret and error-path
   // fixtures are deterministic-manual by rubric and never call a provider.
   const blinded = blindFixtures(corpus.release);
+  corpusFacts = { corpusVersion: corpus.corpusVersion, reviewerRoutedFixtures: corpus.release.filter((fixture) => fixture.route === "reviewer").length };
   onStatus(`blinded ${blinded.length} fixtures; ${corpus.release.filter((fixture) => fixture.route === "reviewer").length} are reviewer-routed`);
   // An abort happens on the spent side of the ledger, so without this the
   // corpus is consumed and the only durable trace is a ledger entry and a
@@ -914,6 +1026,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   const aggregate = scoreMachineRun({ corpus, results, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt });
   await writeMachineReleaseAggregate(options.aggregatePath, aggregate, onStatus);
   return aggregate;
+  }
 }
 
 /**

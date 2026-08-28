@@ -1256,6 +1256,71 @@ describe("aborted draws leave durable evidence", () => {
   });
 });
 
+describe("a killed draw leaves evidence", () => {
+  /** Kill a real child mid-run; a signal unwinds nothing, so nothing else proves this. */
+  const killArmedChild = async (factsMode: string, signal: NodeJS.Signals): Promise<{ directory: string; aggregatePath: string; exitedBySignal: boolean }> => {
+    const directory = mkdtempSync(join(tmpdir(), "smart-approve-signal-guard-"));
+    const aggregatePath = join(directory, "machine-release-aggregate-vX.json");
+    const child = Bun.spawn(["bun", "run", "tests/fixtures/signal-guard-subject.ts", aggregatePath, factsMode], {
+      cwd: new URL("../..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe",
+    });
+    // Wait for "armed" rather than a sleep: signalling before the handler is
+    // installed would test the default disposition instead of the guard.
+    const reader = child.stdout.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain("armed");
+    child.kill(signal);
+    await child.exited;
+    return { directory, aggregatePath, exitedBySignal: child.signalCode !== null };
+  };
+
+  test("a SIGTERM after the spend writes an abort record and re-raises", async () => {
+    const { directory, aggregatePath, exitedBySignal } = await killArmedChild("parsed", "SIGTERM");
+    const recordPath = machineAbortRecordPath(aggregatePath);
+    expect(existsSync(recordPath)).toBe(true);
+    const record = JSON.parse(readFileSync(recordPath, "utf8")) as Record<string, unknown>;
+    expect(record.terminal).toBe("machine-release-aborted");
+    expect(record.reason).toContain("SIGTERM");
+    expect(record.custodyNumber).toBe(2);
+    expect(record.corpusVersion).toBe("2026-08-27-release-v4");
+    // The aggregate path stays empty: a killed draw has nothing to score.
+    expect(existsSync(aggregatePath)).toBe(false);
+    // Re-raised rather than exiting 0, so a caller still sees a killed process.
+    expect(exitedBySignal).toBe(true);
+    rmSync(directory, { recursive: true, force: true });
+  }, 30_000);
+
+  test("a signal before the corpus is parsed says so rather than guessing", async () => {
+    const { directory, aggregatePath } = await killArmedChild("unread", "SIGINT");
+    const record = JSON.parse(readFileSync(machineAbortRecordPath(aggregatePath), "utf8")) as Record<string, unknown>;
+    expect(record.reason).toContain("SIGINT");
+    expect(record.corpusVersion).toContain("unread");
+    expect(record.reviewerRoutedFixtures).toBe(0);
+    rmSync(directory, { recursive: true, force: true });
+  }, 30_000);
+
+  test("the guard is armed after the spend, never before it", () => {
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    const spend = source.indexOf("const spent = spendBeforePrivateInput");
+    const arm = source.indexOf("armCustodySignalGuard({");
+    expect(spend).toBeGreaterThan(-1);
+    // Before the spend there is no custody to explain, and a record written
+    // there would claim a consumption that never happened.
+    expect(arm).toBeGreaterThan(spend);
+    // Handlers must not outlive a run that finished normally.
+    expect(source).toContain("disarmSignals();");
+  });
+
+  test("a killed run does not orphan its server or temp tree", () => {
+    const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
+    expect(source).toContain("liveServers.add(registration)");
+    expect(source).toContain("liveServers.delete(registration)");
+    // `dispose` never runs on a signal, so the handler reaps directly.
+    const guard = source.slice(source.indexOf("export function armCustodySignalGuard"), source.indexOf("return disarm;"));
+    expect(guard).toContain("reapLiveServers()");
+  });
+});
+
 describe("server boot", () => {
   test("boot is retried, because the draw's server opens after custody is spent", () => {
     expect(SERVER_BOOT_ATTEMPTS).toBeGreaterThan(1);
