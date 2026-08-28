@@ -3,7 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CATEGORIES, MINIMUMS, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE, TERMINAL_KINDS } from "../../scripts/qualification/core";
+import { CATEGORIES, MAX_CONCURRENT_REVIEWERS, MINIMUMS, REPEAT_COUNT, REVIEW_TIMEOUT_MS, TEMPERATURE, TERMINAL_KINDS } from "../../scripts/qualification/core";
 import {
   createDevelopmentCandidateReport,
   createFrozenCandidateManifest,
@@ -1133,11 +1133,14 @@ describe("draw infrastructure guards", () => {
     }
   });
 
-  test("the streak reaches the abort limit after three consecutive failures", () => {
+  test("the streak reaches the abort limit, and the limit outlasts one burst", () => {
     let streak = 0;
-    for (let index = 0; index < 3; index += 1) streak = nextTransportFailureStreak(streak, "session_create_error", false);
-    expect(streak).toBeGreaterThanOrEqual(CONSECUTIVE_TRANSPORT_FAILURE_LIMIT);
-    expect(CONSECUTIVE_TRANSPORT_FAILURE_LIMIT).toBe(3);
+    for (let index = 0; index < CONSECUTIVE_TRANSPORT_FAILURE_LIMIT; index += 1) streak = nextTransportFailureStreak(streak, "session_create_error", false);
+    expect(streak).toBe(CONSECUTIVE_TRANSPORT_FAILURE_LIMIT);
+    // Aborting cannot un-spend custody, so a false abort costs a whole draw and
+    // buys nothing. The limit must therefore sit above a single rate-limit
+    // burst, which at this concurrency can only catch the jobs in flight.
+    expect(CONSECUTIVE_TRANSPORT_FAILURE_LIMIT).toBeGreaterThan(MAX_CONCURRENT_REVIEWERS * 2);
   });
 
   test("an aborted draw names the server log so the cause is recoverable", () => {
@@ -1249,7 +1252,7 @@ describe("aborted draws leave durable evidence", () => {
 
   test("an aborted draw writes the record before rethrowing", () => {
     const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
-    const guarded = source.slice(source.indexOf("results = await runBlindedDraw"), source.indexOf("const aggregate = scoreMachineRun"));
+    const guarded = source.slice(source.indexOf("drawn = await runBlindedDraw"), source.indexOf("const aggregate = scoreMachineRun"));
     expect(guarded).toContain("error instanceof MachineDrawAbortedError");
     expect(guarded).toContain("writeMachineAbortRecord");
     expect(guarded).toContain("throw error");
@@ -1269,7 +1272,7 @@ describe("aborted draws leave durable evidence", () => {
     rmSync(directory, { recursive: true, force: true });
 
     const source = readFileSync(new URL("../../scripts/qualification/machine-release.ts", import.meta.url), "utf8");
-    const guarded = source.slice(source.indexOf("results = await runBlindedDraw"), source.indexOf("const aggregate = scoreMachineRun"));
+    const guarded = source.slice(source.indexOf("drawn = await runBlindedDraw"), source.indexOf("const aggregate = scoreMachineRun"));
     // Custody is already spent here: a write failure must not replace the
     // reason the draw aborted with the reason the record could not be saved.
     expect(guarded).toContain("catch (writeError)");

@@ -172,6 +172,19 @@ marked three independent ways -- a `machine-release-rehearsal/v1` schema, an
 `executionMode: "rehearsal"` field, and a filename prefix the writer enforces --
 and `bun run spec:guard` rejects any committed document that cites one.
 
+A draw aborts after `CONSECUTIVE_TRANSPORT_FAILURE_LIMIT` consecutive reviewer
+invocations fail at the transport, counting both `session_create_error` and
+`provider_error` because which label an outage receives depends only on whether
+the transport throws or rejects. The limit is set above the concurrency window
+on purpose: custody is spent before the draw opens the corpus, so an abort saves
+only the provider budget and the clarity of the record, while a false abort on a
+single rate-limit burst throws away a whole draw. A partially degraded draw
+therefore completes, which is the more useful outcome -- `invalidRuns > 0`
+already fails the gate, so nothing can pass on a degraded sample, and the
+aggregate carries `transportFaults` (phase, error name, HTTP status, code, and
+count, never command or provider bytes) so a reader can tell a bad transport
+apart from a bad classifier.
+
 Both release paths require a source-current `development-pass` report bound to
 the same candidate and reject `stop-disabled` or stale reports. The machine path
 performs this validation before ledger initialization/spend and before reading

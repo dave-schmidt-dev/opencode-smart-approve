@@ -100,10 +100,23 @@ const PROVIDER_PROBE_COMMAND = "echo smart-approve-provider-probe";
  * than findings about the classifier. Aborting cannot un-spend custody -- the
  * ledger is spent before the corpus is opened, by design -- but it stops a run
  * from manufacturing a verdict out of an outage, and it returns the unspent
- * provider budget. Three rather than one so a single transient blip does not
- * end an otherwise healthy draw.
+ * provider budget.
+ *
+ * Twelve, not three. Custody is spent before the draw opens the corpus, so an
+ * abort saves nothing except the provider budget and the clarity of the record
+ * -- while a false abort throws away a whole draw. Three is inside the noise of
+ * one rate-limit burst: the draw runs `MAX_CONCURRENT_REVIEWERS` jobs at a
+ * time, so a burst that catches every in-flight slot trips it immediately, and
+ * consumption 3 of the v4 corpus may well have died that way at invocation 228
+ * of 475. Twelve consecutive means every in-flight slot failed three times
+ * over, which is an outage rather than a blip, and it is still reached within
+ * twelve invocations of a hard outage like consumption 1's 194-of-320 loss.
+ * A partial degradation now completes instead, and completing is the more
+ * useful outcome: `invalidRuns > 0` already fails the gate, so nothing can pass
+ * on a degraded sample, and the aggregate carries `transportFaults` so the
+ * causes are on the record across the whole draw rather than the first three.
  */
-export const CONSECUTIVE_TRANSPORT_FAILURE_LIMIT = 3;
+export const CONSECUTIVE_TRANSPORT_FAILURE_LIMIT = 12;
 
 export const SERVER_BOOT_ATTEMPTS = 3;
 /** Per-attempt budget; three attempts cost the wall-clock a single attempt used to. */
@@ -327,6 +340,14 @@ export interface MachineAggregate {
   readonly observations: number;
   readonly providerCalls: number;
   readonly terminalKindCounts: Readonly<Record<TerminalKind, number>>;
+  /**
+   * Causes behind the invalid runs, structural fields only and never command or
+   * provider bytes. Present on a scored draw and not only on an abort record,
+   * because a draw that degrades without tripping the abort limit is exactly
+   * the case where a reader needs to tell a bad classifier apart from a bad
+   * transport, and `terminalKindCounts` alone cannot.
+   */
+  readonly transportFaults: ReturnType<typeof summarizeTransportFaults>;
   readonly invalidRuns: number;
   readonly criticalFalseApprovals: number;
   /** Reviewer-routed critical observations. A zero count against a zero base is not a pass. */
@@ -651,6 +672,30 @@ export async function probeProviderHealth(input: {
  * builds, the schema it parses, the terminal-kind mapping, the abort guards and
  * the scoring are all the shipped code either way.
  */
+/** One finished invocation, before labels are joined back on for scoring. */
+export interface DrawResult {
+  readonly fixtureID: string;
+  readonly repeat: number;
+  readonly decision: "allow" | "manual";
+  readonly route: "deterministic" | "reviewer";
+  readonly providerAttempted: boolean;
+  readonly terminalKind: TerminalKind;
+  readonly valid: boolean;
+  readonly latencyMs: number;
+}
+
+/**
+ * A completed draw and the transport faults observed while running it.
+ *
+ * The faults travel with the results rather than only with an abort, so a draw
+ * that degrades without tripping `CONSECUTIVE_TRANSPORT_FAILURE_LIMIT` still
+ * puts its causes on the record.
+ */
+export interface BlindedDrawOutcome {
+  readonly results: readonly DrawResult[];
+  readonly transportFaults: readonly TransportFault[];
+}
+
 export interface DrawTransport {
   readonly client: ReviewerSessionClient;
   /** Where a reader should look for diagnostics when this draw aborts. */
@@ -670,7 +715,7 @@ export async function runBlindedDraw(input: {
    * so a draw cannot silently stop calling the provider.
    */
   readonly openTransport?: () => Promise<DrawTransport>;
-}): Promise<readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }[]> {
+}): Promise<BlindedDrawOutcome> {
   const server = await (input.openTransport ?? (async (): Promise<DrawTransport> => {
     // Idempotent: `runMachineRelease` already ran this before spending custody.
     // Repeating it keeps direct callers of `runBlindedDraw` honest.
@@ -686,7 +731,7 @@ export async function runBlindedDraw(input: {
   const reviewer = createReviewerAgent({ client: instrumented as unknown as ReviewerSessionClient, timeoutMs: REVIEW_TIMEOUT_MS, directory: PROJECT_ROOT, model: input.modelProfile.model, variant: input.modelProfile.requestedVariant });
 
   const jobs = input.blinded.flatMap((fixture) => Array.from({ length: REPEAT_COUNT }, (_, index) => ({ fixture, repeat: index + 1 })));
-  const results = new Array<{ fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }>(jobs.length);
+  const results = new Array<DrawResult>(jobs.length);
   let completed = 0;
   const progress = setInterval(() => input.onStatus(`machine release ${completed}/${jobs.length} invocations complete`), 8_000);
   let aborted: MachineDrawAbortedError | undefined;
@@ -746,7 +791,7 @@ export async function runBlindedDraw(input: {
     // exactly the v4 failure, where an outage was written up as three
     // classifier findings.
     if (aborted) throw aborted;
-    return results;
+    return { results, transportFaults };
   } finally {
     clearInterval(progress);
     await reviewer.dispose().catch(() => undefined);
@@ -905,7 +950,9 @@ export async function writeMachineReleaseAggregate(
 
 export function scoreMachineRun(input: {
   readonly corpus: MachineReleaseCorpus;
-  readonly results: readonly { fixtureID: string; repeat: number; decision: "allow" | "manual"; route: "deterministic" | "reviewer"; providerAttempted: boolean; terminalKind: TerminalKind; valid: boolean; latencyMs: number }[];
+  readonly results: readonly DrawResult[];
+  /** Structural fault causes from the draw; recorded verbatim onto the aggregate. */
+  readonly transportFaults?: readonly TransportFault[];
   readonly corpusDigest: string;
   readonly custodyNumber: number;
   readonly priorConsumptions?: readonly { readonly consumptionNumber: number; readonly reason: string }[];
@@ -976,6 +1023,7 @@ export function scoreMachineRun(input: {
   })) as Record<FixtureCategory, { agreed: number; total: number }>;
 
   const invalidRuns = observations.filter((observation) => !observation.valid).length;
+  const transportFaults = summarizeTransportFaults(input.transportFaults ?? []);
   const terminalKindCounts = Object.fromEntries(TERMINAL_KINDS.map((kind) => [kind, 0])) as Record<TerminalKind, number>;
   for (const observation of observations) terminalKindCounts[observation.terminalKind] += 1;
   const reviewerRoutedFixtures = input.corpus.release.filter((fixture) => fixture.route === "reviewer").length;
@@ -1007,6 +1055,7 @@ export function scoreMachineRun(input: {
     observations: observations.length,
     providerCalls: observations.filter((observation) => observation.providerAttempted).length,
     terminalKindCounts,
+    transportFaults,
     invalidRuns,
     criticalFalseApprovals,
     criticalDenominator: criticalObservations.length,
@@ -1177,9 +1226,9 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
   // gitignored log -- the same shape of evidence loss as TASK-027. The record
   // is not an aggregate and must never be read as one: it carries no scores,
   // because a run that aborted has nothing to score.
-  let results: Awaited<ReturnType<typeof runBlindedDraw>>;
+  let drawn: BlindedDrawOutcome;
   try {
-    results = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile, ...(options.openTransport ? { openTransport: options.openTransport } : {}) });
+    drawn = await runBlindedDraw({ blinded, onStatus, modelProfile: candidate.candidate.modelProfile, ...(options.openTransport ? { openTransport: options.openTransport } : {}) });
   } catch (error) {
     if (error instanceof MachineDrawAbortedError) {
       // A failure to write the record must not replace the abort reason. The
@@ -1205,7 +1254,7 @@ export async function runMachineRelease(options: MachineReleaseOptions): Promise
     }
     throw error;
   }
-  const aggregate = scoreMachineRun({ corpus, results, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt, executionMode });
+  const aggregate = scoreMachineRun({ corpus, results: drawn.results, transportFaults: drawn.transportFaults, corpusDigest: digestCompanion, custodyNumber: spent.consumptionNumber, priorConsumptions, generatedAt: options.generatedAt, executionMode });
   await writeMachineReleaseAggregate(options.aggregatePath, aggregate, onStatus);
   return aggregate;
   }

@@ -66,9 +66,11 @@ missing-corpus handling, and spent-custody digest mismatch handling.
 `tests/eval/machine-release-rehearsal.test.ts` runs that whole path end to end
 against a scripted session client, which is the only seam a live model call sits
 behind: a clean pass, a seeded critical false approval, unparseable answers as
-invalid runs, a session-creation cascade, a transport that dies mid-draw, and a
-probe failure that leaves custody unspent. Its artifacts carry a rehearsal schema
-and `executionMode: "rehearsal"`, and are evidence about the harness only.
+invalid runs, a session-creation cascade, a transport that dies mid-draw, a
+degradation too scattered to trip the abort limit whose causes still reach the
+aggregate's `transportFaults`, and a probe failure that leaves custody unspent.
+Its artifacts carry a rehearsal schema and `executionMode: "rehearsal"`, and are
+evidence about the harness only.
 The release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`; it is `release-disabled` on
 classifier evidence, not on authorship — the 2026-08-14 owner decision under

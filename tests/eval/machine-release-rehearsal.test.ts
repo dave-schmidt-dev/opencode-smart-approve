@@ -14,7 +14,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { REPEAT_COUNT } from "../../scripts/qualification/core";
+import { MAX_CONCURRENT_REVIEWERS, REPEAT_COUNT } from "../../scripts/qualification/core";
 import {
   createDevelopmentCandidateReport,
   createFrozenCandidateManifest,
@@ -25,6 +25,7 @@ import {
   type QualificationRecord,
 } from "../../scripts/classifier-gate";
 import {
+  CONSECUTIVE_TRANSPORT_FAILURE_LIMIT,
   MACHINE_AGGREGATE_SCHEMA,
   MACHINE_REHEARSAL_SCHEMA,
   MACHINE_THRESHOLDS,
@@ -291,6 +292,41 @@ describe("a rehearsal that answers badly scores as a fail", () => {
   }, 120_000);
 });
 
+describe("a draw that degrades without dying records why", () => {
+  test("scattered transport failures complete the draw and land on the aggregate", async () => {
+    const corpus = await corpusPromise;
+    const agreeable = agreeableScript(corpus);
+    // One in four fails, so the streak never approaches the abort limit and the
+    // draw runs to completion. This is the case the raised limit exists for:
+    // aborting here would throw away a whole draw over a burst, while
+    // completing still fails the gate on invalid runs and now says why.
+    const outcome = await rehearse({
+      label: "degraded",
+      corpus,
+      script: (call) => (call.callIndex % 4 === 3
+        ? { kind: "promptRejects", error: () => Object.assign(new Error("rehearsal rate limit"), { name: "RateLimitError", status: 429 }) }
+        : agreeable(call)),
+    });
+    expect(outcome.error).toBeUndefined();
+    const aggregate = outcome.aggregate!;
+    expect(aggregate.terminal).toBe("machine-release-fail");
+    expect(aggregate.invalidRuns).toBeGreaterThan(0);
+    expect(aggregate.failures).toContain(`invalid runs: ${aggregate.invalidRuns}`);
+    // Without this a reader sees only a count of bad runs and cannot tell a bad
+    // classifier from a bad transport -- which is how the v4 draw was misread.
+    expect(aggregate.transportFaults.length).toBeGreaterThan(0);
+    expect(aggregate.transportFaults[0]).toMatchObject({ phase: "session.prompt", name: "RateLimitError", status: 429 });
+    const written = JSON.parse(readFileSync(outcome.artifacts.aggregatePath, "utf8")) as MachineAggregate;
+    expect(written.transportFaults).toEqual(aggregate.transportFaults);
+  }, 120_000);
+
+  test("a clean draw records no faults at all", async () => {
+    const corpus = await corpusPromise;
+    const outcome = await rehearse({ label: "nofaults", corpus, script: agreeableScript(corpus) });
+    expect(outcome.aggregate!.transportFaults).toEqual([]);
+  }, 120_000);
+});
+
 describe("a rehearsal that loses its transport aborts instead of scoring", () => {
   test("consecutive session-creation failures abort and name the cause", async () => {
     const corpus = await corpusPromise;
@@ -298,9 +334,9 @@ describe("a rehearsal that loses its transport aborts instead of scoring", () =>
     const outcome = await rehearse({
       label: "cascade",
       corpus,
-      // Enough to outlast the concurrency window, so the streak is reached
-      // regardless of which worker claims which job.
-      script: (call) => (call.callIndex < 8 ? { kind: "createFails", error: () => Object.assign(new Error("rehearsal outage"), { name: "TransportError", status: 503 }) } : agreeable(call)),
+      // Enough to outlast the concurrency window and the abort limit together,
+      // so the streak is reached regardless of which worker claims which job.
+      script: (call) => (call.callIndex < CONSECUTIVE_TRANSPORT_FAILURE_LIMIT + MAX_CONCURRENT_REVIEWERS * 2 ? { kind: "createFails", error: () => Object.assign(new Error("rehearsal outage"), { name: "TransportError", status: 503 }) } : agreeable(call)),
     });
     expect(outcome.error).toBeInstanceOf(MachineDrawAbortedError);
     expect((outcome.error as Error).message).toMatch(/consecutive reviewer invocations failed at the transport/);
@@ -447,7 +483,7 @@ describe("a synchronous session.prompt throw is reported as a session-creation f
       label: "sync-throw",
       corpus,
       script: (call: RehearsalCall): RehearsalReply =>
-        (call.callIndex < 8 ? { kind: "promptThrows", error: () => Object.assign(new Error("rehearsal: transport threw"), { name: "TransportError", status: 502 }) } : agreeable(call)),
+        (call.callIndex < CONSECUTIVE_TRANSPORT_FAILURE_LIMIT + MAX_CONCURRENT_REVIEWERS * 2 ? { kind: "promptThrows", error: () => Object.assign(new Error("rehearsal: transport threw"), { name: "TransportError", status: 502 }) } : agreeable(call)),
     });
     // The draw aborts rather than scoring, because the streak counts both
     // transport labels. Before that change this run produced a scored
@@ -479,8 +515,9 @@ describe("the draw loop is reachable without a server", () => {
       modelProfile: gate.candidate.candidate.modelProfile,
       openTransport: async () => transport,
     });
-    expect(results.length).toBe(blinded.length * REPEAT_COUNT);
-    expect(results.every((result) => result.valid)).toBe(true);
+    expect(results.results.length).toBe(blinded.length * REPEAT_COUNT);
+    expect(results.results.every((result) => result.valid)).toBe(true);
+    expect(results.transportFaults).toEqual([]);
     expect(transport.disposed()).toBe(true);
   }, 60_000);
 });
