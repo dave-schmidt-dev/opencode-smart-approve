@@ -43,6 +43,23 @@ import {
   routeGoalFor,
 } from "../../scripts/qualification/author-machine-corpus";
 import type { PrivateReleaseFixture } from "../../scripts/qualification/release-corpus";
+/**
+ * The offline rehearsal suite, pulled in here rather than listed in
+ * `package.json`.
+ *
+ * `package.json` is in `SOURCE_MANIFEST_FILES`, so adding a path to
+ * `test:offline` changes the frozen candidate's source manifest and voids the
+ * freeze -- which would in turn retire the release corpus bound to it, since a
+ * corpus names the candidate hash it was authored against. Wiring a test into
+ * the runner is not worth retiring a corpus, and leaving the suite outside the
+ * gate is not acceptable either, so it is imported: `bun:test` registers a
+ * suite when its module is evaluated, so these tests run wherever this file
+ * runs. Verified by test-count delta rather than file-count delta.
+ *
+ * Replace this with a proper `test:offline` entry at the next candidate
+ * re-freeze, whenever one is taken for an unrelated reason.
+ */
+import "./machine-release-rehearsal.test";
 
 const CANDIDATE = "d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5";
 /**
