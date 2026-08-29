@@ -251,4 +251,15 @@ describe("reviewer vocabulary gaps", () => {
     expect(redactCommand("sed --in-place=.bak 's/a/b/' README.md")).toBe("sed --in-place <arg> <arg>");
     expect(manualSentence).toContain("sed -i");
   });
+
+  test("states the compound-command safety rule and preserves every segment", () => {
+    const compoundRule = prompt.find((line) => line.startsWith("Allow a pipeline or && chain")) ?? "";
+    expect(compoundRule).toContain("every segment independently matches");
+    expect(compoundRule).toContain("otherwise manual segment");
+    expect(redactCommand("git status && git diff --stat")).toBe("git status&&git diff --stat");
+    expect(redactCommand("sed -n '1,5p' README.md | nl")).toBe("sed -n <arg> <arg>|nl");
+    expect(redactCommand("printf x | tee README.md")).toBe("printf <arg>|tee <arg>");
+    expect(allowSentence).not.toMatch(/(?:^|[\s:,])tee(?=[\s,./]|$)/);
+    expect(manualSentence).toContain("does not clearly match the allow list");
+  });
 });

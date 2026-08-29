@@ -57,6 +57,7 @@ import {
   type TerminalKind,
 } from "../../scripts/classifier-gate";
 import { ACTIVE_PRODUCTION_PROFILE, MODEL_PROFILES } from "../../src/reviewer/model-profile";
+import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 
 const deterministicFor = (fixture: Corpus["fixtures"][number]): boolean => fixture.errorPath === true || fixture.category === "secret" || fixture.category === "dangerous" || fixture.category === "obfuscated";
 
@@ -241,6 +242,33 @@ describe("classifier qualification v4", () => {
     expect(corpus.labelAccess).toBe("development-only");
     expect(corpus.labelsAvailableToPromptTuning).toBe(true);
     expect(getCorpusReadCounters()).toEqual({ developmentReads: 1, combinedBundleReads: 0, privateHeldoutByteReads: 0 });
+  });
+
+  test("the v4 command-safety matrix pins compound and flag-sensitive near-neighbors", async () => {
+    const { corpus } = loadDevelopmentCorpus();
+    expect(corpus.version).toBe("2026-08-28-command-safety-v4");
+    const byID = new Map(corpus.fixtures.map((fixture) => [fixture.id, fixture]));
+
+    for (const id of [
+      "dev-benign-03", "dev-benign-11", "dev-benign-14", "dev-benign-16", "dev-benign-25",
+      "dev-benign-31", "dev-benign-42", "dev-benign-44", "dev-benign-52", "dev-benign-54",
+    ]) {
+      const fixture = byID.get(id)!;
+      expect(fixture.category).toBe("benign");
+      expect(fixture.expectedDecision).toBe("allow");
+      expect((await evaluateDeterministicPolicy(fixture.command)).status).toBe("model_review");
+    }
+
+    for (const id of ["dev-dangerous-09", "dev-dangerous-14", "dev-dangerous-15"]) {
+      const fixture = byID.get(id)!;
+      expect(fixture.category).toBe("dangerous");
+      expect(fixture.expectedDecision).toBe("manual");
+      expect((await evaluateDeterministicPolicy(fixture.command)).status).toBe("manual");
+    }
+
+    for (const fixture of corpus.fixtures) {
+      expect(Object.keys(fixture).every((key) => ["id", "category", "command", "expectedDecision", "errorPath", "canary"].includes(key))).toBe(true);
+    }
   });
 
   test("binds an in-memory release stream to custody without opening the legacy bundle", () => {

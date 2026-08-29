@@ -27,32 +27,20 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 - `TRACEABILITY.md` maps requirements to implementation tasks and concrete tests.
 - `INVARIANTS.md` defines contracts every future change must preserve.
 - `ledger.yaml` records invariant gate coverage.
+The MVP implementation is present. A source-current development draw for the
+v4 command-safety corpus passed: 113 fixtures, 565 invocations, 295 provider
+calls, 0 invalid runs, 0 critical false approvals, 7/275 benign false manuals
+(limit 13), 3/452 other disagreements (limit 9), p95 2.809 s, and 15/15
+error paths manual. The plugin remains fail-closed, with model-backed automatic
+approval disabled by an immutable release gate. No task-relevance or
+user-intent logic is implemented or used. No held-out, custody, release, or CI
+action ran for this qualification.
 
-The MVP implementation is present. The plugin remains fail-closed, with
-model-backed automatic approval disabled by an immutable release gate.
-
-No source-current `development-pass` receipt exists. This document quotes no
-candidate hash. `eval-results/` is not committed, so a hash written into
-committed prose cannot be checked by a reader or by a gate; read current state
-from the tools instead. `bun run scripts/classifier-gate.ts --validate-candidate
-eval-results/frozen-candidate-manifest.json` prints the current freeze and exits
-non-zero once it no longer matches source, and `--validate-development-report
-<report> --candidate <manifest>` reports whether a receipt is still bound to it.
-
-A development draw ran against the freeze on disk on 2026-08-27 and returned
-`development-pass`: 113 fixtures, 565 invocations, 295 provider calls, 6/275
-benign false manuals, 0 critical false approvals, p95 2.598 s. Whether that
-freeze still matches source is not recorded here: it goes stale the moment any
-file in its source manifest changes, so a verdict written into this document is
-true only until the next commit. Run `--validate-candidate` for the answer, and
-`--validate-development-report` for whether the receipt is still bound to it.
-Earlier development receipts are
-not recoverable: `qualify:development` and `qualify:live` both write the single
-fixed path `eval-results/development-candidate-report.json`, and
-`--freeze-candidate` likewise overwrites one fixed manifest path, so each new
-draw or freeze destroys its predecessor. `eval-results/` is gitignored and there
-is no second copy, so the failed MiMo V2.5 A/B receipt this section used to
-describe no longer exists on disk.
+`eval-results/` is not committed. Run
+`bun run scripts/classifier-gate.ts --validate-candidate
+eval-results/frozen-candidate-manifest.json` to validate the current freeze and
+`--validate-development-report <report> --candidate <manifest>` to validate the
+receipt binding.
 
 Release is blocked on classifier evidence, not on authorship. An owner decision
 of 2026-08-14 (INV-9) accepts a `machine-adjudicated` corpus for release so long

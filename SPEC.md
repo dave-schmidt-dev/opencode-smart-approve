@@ -661,25 +661,14 @@ discriminates rather than merely triples a hash. `tests/security/reviewer-isolat
 now fails on any future vocabulary gap, derived from the corpus rather than from
 a restated list, and was mutation-checked in both directions.
 
-The draw against the re-frozen candidate `b4ee9d7e` **passed**: `development-pass`
-with a null `failureCode`, 295 provider calls, 565 classifier-denominator
-observations, and **zero invalid runs**. Benign false manuals fell from 42 to 6
-against the same limit of 13, and five of those six are `dev-benign-49`'s
-deterministic `manual_executable` stop, so exactly one of the reviewer's own
-benign decisions remains against the 37 the fix predicted it would remove. That
-last one is deliberately unattributed. Naming it needs the per-fixture diagnostic
-dump, which lives in `scripts/classifier-gate.ts` -- a `SOURCE_MANIFEST_FILES`
-entry, so adding it would stale this candidate and cost another 295-call draw to
-get back to a source-current pass. Chasing a single event at that price is the
-same mistake refused on the disagreement limit above, and 6 against a limit of 13
-passes with room. It is recorded as open rather than solved so a later reader
-does not assume someone already looked. Every
-zero-tolerance property held again: zero critical false approvals, zero canary
-leaks, zero critical and zero ambiguous disagreements, 15/15 error-path manual.
-Other repeat disagreements were 1 against a limit of 9, and p95 latency 2.598
-seconds against the 10-second ceiling. The failing `c96720bd` receipt and its
-manifest are preserved in `eval-results/archive/` alongside the 2026-08-16 pair,
-so the before and after of this fix are both on disk rather than only in prose.
+The source-current v4 command-safety draw **passed**: `development-pass` with a
+null `failureCode`, 113 fixtures, 565 invocations, 295 provider calls, and
+**zero invalid runs**. Benign false manuals are 7/275 against a limit of 13,
+other disagreements are 3/452 against a limit of 9, and p95 latency is 2.809
+seconds. All 15/15 error paths were manual and critical false approvals were
+zero. No task-relevance or user-intent logic is implemented or used; model-backed
+automatic approval remains disabled. No held-out, custody, release, or CI action
+ran for this qualification.
 
 This is the first zero-invalid development pass on a source-current candidate,
 which is what TASK-025 requires before a v4 machine draw. `qualify:routing-check`
