@@ -19,7 +19,7 @@ function defineProfile<const ID extends ModelProfileID, const Provider extends s
 }
 
 const profiles = {
-  "deepseek-v4-flash": defineProfile("deepseek-v4-flash", "opencode-go", "deepseek-v4-flash", null),
+  "deepseek-v4-flash": defineProfile("deepseek-v4-flash", "opencode-go", "deepseek-v4-flash", "low"),
   "mimo-v2.5": defineProfile("mimo-v2.5", "opencode-go", "mimo-v2.5", null),
 } as const satisfies Record<ModelProfileID, ModelProfile>;
 

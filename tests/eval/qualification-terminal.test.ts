@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   QUALIFICATION_MODEL,
+  QUALIFICATION_VARIANT,
   REPEAT_COUNT,
   createDevelopmentCandidateReport,
   createFrozenCandidateManifest,
@@ -127,5 +128,6 @@ describe("fixed-candidate terminal qualification", () => {
     expect(custody.manifestHash).toMatch(/^[0-9a-f]{64}$/);
     expect(attestation.attestationHash).toMatch(/^[0-9a-f]{64}$/);
     expect(QUALIFICATION_MODEL).toBe("opencode-go/deepseek-v4-flash");
+    expect(QUALIFICATION_VARIANT).toBe("low");
   });
 });

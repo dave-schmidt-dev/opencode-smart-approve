@@ -29,6 +29,7 @@ describe("canonical reviewer contract", () => {
       coordinatorID,
       providerID: "opencode-go",
       modelID: "deepseek-v4-flash",
+      requestedVariant: "low",
       timeoutMs: 30_000,
       directory: "/project",
       parentSessionID: "parent-session",
@@ -41,6 +42,7 @@ describe("canonical reviewer contract", () => {
       version: "classifier-qualification/v3",
       coordinatorID,
       requestedModel: "opencode-go/deepseek-v4-flash",
+      requestedVariant: "low",
       temperature: 0,
       retryCount: 0,
       timeoutMs: 30_000,
@@ -230,8 +232,8 @@ describe("production/evaluation parity harness", () => {
     expect(production.create.count).toBe(1);
     expect(production.create.parentLinked).toBe(true);
     expect(production.prompt.count).toBe(1);
-    expect(production.registration.variant).toBeUndefined();
-    expect(production.prompt.variant).toBeUndefined();
+    expect(production.registration.variant).toBe("low");
+    expect(production.prompt.variant).toBe("low");
     expect(production.terminal).toEqual({ state: "manual", outcomeKind: "valid_model", approvalCalls: 0 });
     const serialized = JSON.stringify(buildParityReport(production, evaluation));
     expect(serialized).not.toContain("PARITY_SECRET_CANARY");
@@ -239,18 +241,18 @@ describe("production/evaluation parity harness", () => {
     expect(validateParityReport(buildParityReport(production, evaluation))).toEqual({ accepted: true, errors: [] });
   });
 
-  test("keeps the no-variant DeepSeek production candidate identical across production and evaluation plumbing", async () => {
+  test("keeps the DeepSeek low production candidate identical across production and evaluation plumbing", async () => {
     const profile = MODEL_PROFILES["deepseek-v4-flash"];
     const config = validateConfig({
-      model: { enabled: false, provider: profile.providerID, model: profile.modelID, variant: undefined, timeoutMs: 30_000 },
+      model: { enabled: false, provider: profile.providerID, model: profile.modelID, variant: "low", timeoutMs: 30_000 },
     });
     const production = await captureProductionParity(scenario, config);
     const evaluation = captureEvaluationParity(scenario, config);
     expect(compareParityCaptures(production, evaluation)).toEqual({ equal: true, mismatches: [] });
     expect(production.registration.model).toBe(profile.model);
-    expect(production.registration.variant).toBeUndefined();
-    expect(production.contract).not.toHaveProperty("requestedVariant");
-    expect(production.prompt.variant).toBeUndefined();
+    expect(production.registration.variant).toBe("low");
+    expect(production.contract.requestedVariant).toBe("low");
+    expect(production.prompt.variant).toBe("low");
   });
 
   test("field-level parity negatives identify each deliberately divergent capture", async () => {

@@ -989,11 +989,12 @@ describe("OpenCode 1.18.10 contract canary", () => {
     expect(result.toolCounters).toEqual(ZERO_TOOL_COUNTERS);
     expect(calls[0]).toEqual(["create", expect.objectContaining({ body: { parentID: "parent", title: "smart-approve:request-2" } })]);
     const promptCall = calls.find((call): call is [string, unknown] => Array.isArray(call) && call[0] === "prompt");
-    const prompt = promptCall?.[1] as { body: { model: unknown; tools: Record<string, boolean> } };
+    const prompt = promptCall?.[1] as { body: { model: unknown; variant: unknown; tools: Record<string, boolean> } };
     expect(prompt.body.model).toEqual({ providerID: "opencode-go", modelID: "deepseek-v4-flash" });
+    expect(prompt.body.variant).toBe("low");
     expect(prompt.body.tools).toMatchObject({ bash: false, edit: false, read: false, task: false, webfetch: false });
     expect(REVIEWER_MODEL).toBe("opencode-go/deepseek-v4-flash");
-    expect(REVIEWER_VARIANT).toBeNull();
+    expect(REVIEWER_VARIANT).toBe("low");
     await reviewer.dispose();
   });
 

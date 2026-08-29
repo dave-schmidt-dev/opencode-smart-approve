@@ -244,7 +244,7 @@ export function captureEvaluationParity(scenario: ParityScenario, config: SmartA
     prompt: {
       count: 1,
       model: contract.requestedModel,
-      variant: undefined,
+      variant: contract.requestedVariant,
       temperature: contract.temperature,
       format: { type: "json_schema", retryCount: contract.retryCount, schema: REVIEWER_OUTPUT_SCHEMA },
       system: contract.system,

@@ -293,6 +293,7 @@ export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgen
           body: {
             agent: REVIEWER_AGENT,
             model: { providerID: contract.providerID, modelID: contract.modelID },
+            ...(contract.requestedVariant === undefined ? {} : { variant: contract.requestedVariant }),
             format: CONTRACT_OUTPUT_FORMAT,
             tools: contract.tools,
             system: contract.system,

@@ -5,7 +5,7 @@
     "providerID": "opencode-go",
     "modelID": "deepseek-v4-flash",
     "model": "opencode-go/deepseek-v4-flash",
-    "requestedVariant": null
+    "requestedVariant": "low"
   },
   "parameters": {
     "temperature": 0,
@@ -98,7 +98,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -211,7 +211,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -324,7 +324,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -437,7 +437,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -550,7 +550,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1031,7 +1031,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1144,7 +1144,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1257,7 +1257,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1370,7 +1370,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1483,7 +1483,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1596,7 +1596,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1709,7 +1709,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1822,7 +1822,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -1935,7 +1935,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2048,7 +2048,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2161,7 +2161,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2274,7 +2274,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2387,7 +2387,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2500,7 +2500,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2613,7 +2613,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2726,7 +2726,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2839,7 +2839,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -2952,7 +2952,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3065,7 +3065,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3178,7 +3178,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3291,7 +3291,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3404,7 +3404,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3517,7 +3517,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3630,7 +3630,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3743,7 +3743,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3856,7 +3856,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -3969,7 +3969,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4082,7 +4082,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4195,7 +4195,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4308,7 +4308,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4421,7 +4421,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4534,7 +4534,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4647,7 +4647,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4760,7 +4760,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4873,7 +4873,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -4986,7 +4986,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -5099,7 +5099,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -5212,7 +5212,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -5325,7 +5325,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -5438,7 +5438,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -5551,7 +5551,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -5664,7 +5664,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -5777,7 +5777,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -5890,7 +5890,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6003,7 +6003,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6116,7 +6116,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6229,7 +6229,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6342,7 +6342,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6501,7 +6501,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6614,7 +6614,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6727,7 +6727,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6840,7 +6840,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -6953,7 +6953,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -7066,7 +7066,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -7179,7 +7179,7 @@
         },
         "temperature": 0,
         "requestedModel": "opencode-go/deepseek-v4-flash",
-        "requestedVariant": null,
+        "requestedVariant": "low",
         "tools": {
           "*": false,
           "bash": false,
@@ -9256,7 +9256,7 @@
     }
   ],
   "digests": {
-    "reviewerInput": "f2cf273a82cef1b82f10a35daaa4d94354554841c4464253b23228ecf90275c0",
+    "reviewerInput": "74b80965c21418f6d145570e5f70c0d4364cd3e77628e03b34287d5cb594bf6d",
     "policy": "2c3bf416db8703046e9a2c001f604f989d84524acff051f2677fdd2095d89101",
     "acceptance": "731856550246e041f8d047f5b757f6c25bb65fe28e373fa201387777edf594cf"
   }

@@ -60,7 +60,7 @@ describe("reviewer isolation", () => {
     expect(promptInput.body.agent).toBe("smart-approve-reviewer");
     expect(promptInput.body.model).toEqual({ providerID: "opencode-go", modelID: "deepseek-v4-flash" });
     expect(promptInput.body.format).toMatchObject({ type: "json_schema", retryCount: 0, schema: { additionalProperties: false } });
-    expect(promptInput.body.variant).toBeUndefined();
+    expect(promptInput.body.variant).toBe("low");
     expect(promptInput.body.tools["*"]).toBe(false);
     for (const tool of ["bash", "read", "write", "edit", "mcp", "webfetch", "websearch", "network", "task", "skill"]) {
       expect(promptInput.body.tools[tool]).toBe(false);

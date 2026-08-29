@@ -1,6 +1,6 @@
 # SPEC: OpenCode Smart Approve
 
-Status: implemented MVP; MiMo release qualification failed; DeepSeek default is next unqualified candidate
+Status: implemented MVP; MiMo release qualification failed; DeepSeek low default is next unqualified candidate
 PlanningTier: impulse
 Target: OpenCode 1.18.10 on macOS and Linux
 License: MIT
@@ -25,7 +25,7 @@ commands proceeding without user action, every candidate command being reviewed 
 a qualified selected-profile reviewer, and no error path turning into an automatic
 approval. The current build does not meet that outcome: the MiMo candidate passed
 development and attended smoke but failed its candidate-bound private release
-draw. MiMo remains failed historical evidence; the no-variant DeepSeek default
+draw. MiMo remains failed historical evidence; the DeepSeek low default
 is the next unqualified candidate. Model-backed automatic approval remains disabled.
 
 ## 3. Scope
@@ -154,7 +154,7 @@ shell command executed; manual states leave that decision with OpenCode and the 
 - Description: Every command eligible for auto-approval must receive a successful
   model review.
 - Acceptance criteria:
-  - [ ] Disabled production default is the active entry in `src/reviewer/model-profile.ts` (currently `opencode-go/deepseek-v4-flash`, no requested variant).
+  - [ ] Disabled production default is the active entry in `src/reviewer/model-profile.ts` (currently `opencode-go/deepseek-v4-flash`, requested variant `low`).
   - [ ] Reviewer model, provider, optional variant, and timeout are configurable.
   - [ ] Reviewer receives only the redacted command representation, parser feature
     summary, policy facts, and project/external path classes.
@@ -494,7 +494,7 @@ flagged as a probable third systematic case, explicitly uninvestigated,
 because investigating it would require the same disclosure-risking probe
 used above and no further such probes are being run against this corpus.
 
-DeepSeek V4 Flash is the disabled production default and next unqualified
+DeepSeek V4 Flash `low` is the disabled production default and next unqualified
 candidate; model-backed automatic approval must remain disabled. MiMo V2.5 also
 is not qualified: it passed development but failed its one-use release draw and
 remains failed historical evidence. The blocker is no longer purely a model/prompt-wording
@@ -907,7 +907,7 @@ permission authority without schema, state, and deterministic hard-block checks.
 1. Shell permission requests only.
 2. Native `bash: ask` remains enabled.
 3. Every automatic approval requires model review; deterministic policy cannot grant.
-4. No-variant DeepSeek V4 Flash is the disabled production default and next
+4. DeepSeek V4 Flash `low` is the disabled production default and next
    unqualified candidate. MiMo V2.5 remains registered as failed historical
    evidence and no profile is trusted until qualification.
 5. Repeated commands are re-evaluated and re-reviewed; verdicts are not cached.

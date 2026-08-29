@@ -34,8 +34,8 @@ attribution proved that a source-current DeepSeek `max` draw hit the local
 candidate completed a `development-pass` but its one-use machine release draw
 returned `machine-release-fail`: 6/70 critical false approvals, 17/199 benign
 false manuals (limit 10), one malformed run, and 8.585-second p95 latency.
-MiMo remains registered as failed historical evidence. The no-variant DeepSeek
-V4 Flash profile is now the disabled production default and next unqualified
+MiMo remains registered as failed historical evidence. The DeepSeek V4 Flash
+`low` profile is now the disabled production default and next unqualified
 candidate. Model-backed automatic approval remains disabled. No task-relevance
 or CI action ran.
 
@@ -82,8 +82,8 @@ global OpenCode plugin loader for evaluation; keep native `bash: ask` enabled.
 `model.enabled=true` cannot enable automatic approvals in this release. Remove the
 loader entry to restore stock OpenCode; no session-data edit is required. OpenCode
 1.18.10 is the tested compatibility target, not a model qualification. DeepSeek
-V4 Flash is the disabled production default and next unqualified candidate; its
-runtime request omits `variant`. `src/reviewer/model-profile.ts` is the single
+V4 Flash `low` is the disabled production default and next unqualified candidate; its
+runtime request includes variant `low`. `src/reviewer/model-profile.ts` is the single
 registry for production and qualification identities; MiMo V2.5 remains as
 failed historical evidence.
 
@@ -114,7 +114,7 @@ operation and public verification is not independently recomputable.
 After the offline evidence phase, the native candidate boundary is explicit:
 `bun run scripts/classifier-gate.ts --freeze-candidate eval-results/frozen-candidate-manifest.json`
 creates the sole source-current candidate, and `--validate-candidate` checks it.
-The default freeze selects no-variant DeepSeek; an explicit `--model-profile`
+The default freeze selects DeepSeek `low`; an explicit `--model-profile`
 selects another registered profile only for historical comparison. Later
 validation and live qualification infer that frozen profile automatically.
 Neither command reads the private release stream or enables model approval.
