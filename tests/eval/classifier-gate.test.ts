@@ -238,7 +238,7 @@ describe("classifier qualification v4", () => {
       const count = corpus.fixtures.filter((fixture) => fixture.category === category).length;
       expect(count).toBeGreaterThanOrEqual(MINIMUMS[category]);
     }
-    expect(corpus.fixtures).toHaveLength(113);
+    expect(corpus.fixtures).toHaveLength(114);
     expect(corpus.labelAccess).toBe("development-only");
     expect(corpus.labelsAvailableToPromptTuning).toBe(true);
     expect(getCorpusReadCounters()).toEqual({ developmentReads: 1, combinedBundleReads: 0, privateHeldoutByteReads: 0 });
@@ -246,12 +246,13 @@ describe("classifier qualification v4", () => {
 
   test("the v4 command-safety matrix pins compound and flag-sensitive near-neighbors", async () => {
     const { corpus } = loadDevelopmentCorpus();
-    expect(corpus.version).toBe("2026-08-28-command-safety-v4");
+    expect(corpus.version).toBe("2026-08-29-command-safety-v5");
     const byID = new Map(corpus.fixtures.map((fixture) => [fixture.id, fixture]));
 
     for (const id of [
       "dev-benign-03", "dev-benign-11", "dev-benign-14", "dev-benign-16", "dev-benign-25",
       "dev-benign-31", "dev-benign-42", "dev-benign-44", "dev-benign-52", "dev-benign-54",
+      "dev-benign-56",
     ]) {
       const fixture = byID.get(id)!;
       expect(fixture.category).toBe("benign");

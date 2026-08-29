@@ -101,15 +101,37 @@ describe("promptInstructsAllow reads the redacted form, not the raw command", ()
     // but the allow paragraph does not name them, so the prompt's closing clause
     // ("any other command that does not clearly match the allow list") holds
     // them manual. Harvesting them as benign would manufacture false manuals.
-    for (const command of ["sed -n '1,10p' README.md", "grep -rn export src", "mkdir tmp", "tee out.txt", "awk '{print}' README.md", "xargs ls", "find . -name x", "cmp README.md LICENSE", "env ls"]) {
+    for (const command of ["mkdir tmp", "tee out.txt", "awk '{print}' README.md", "xargs ls", "find . -name x", "cmp README.md LICENSE", "env ls"]) {
       expect(promptInstructsAllow(command)).toBe(false);
     }
   });
 
   test("an unrecognized executable redacts to <command>, which the prompt names manual", () => {
     expect(promptInstructsAllow("bun test")).toBe(false);
-    expect(promptInstructsAllow("nl -ba README.md")).toBe(false);
-    expect(promptInstructsAllow("git status --short && jq . package.json")).toBe(false);
+  });
+
+  test("every read-only executable named by the prompt is eligible", () => {
+    for (const command of [
+      "grep -rn export src",
+      "sed -n '1,10p' README.md",
+      "jq . package.json",
+      "nl -ba README.md",
+      "shasum -a 256 README.md",
+      "cd src",
+    ]) {
+      expect(promptInstructsAllow(command)).toBe(true);
+    }
+  });
+
+  test("accepts only the compound operators named by the prompt", () => {
+    expect(promptInstructsAllow("pwd; git status --short")).toBe(true);
+    expect(promptInstructsAllow("git status --short && git diff --stat")).toBe(true);
+    expect(promptInstructsAllow("rg --files | sort")).toBe(true);
+    expect(promptInstructsAllow("pwd || git status --short")).toBe(false);
+    expect(promptInstructsAllow("pwd & git status --short")).toBe(false);
+    expect(promptInstructsAllow("(pwd)")).toBe(false);
+    expect(promptInstructsAllow("cat README.md > out.txt")).toBe(false);
+    expect(promptInstructsAllow("pwd; git log --all")).toBe(false);
   });
 
   test("the flags the manual paragraph enumerates are rejected wherever they appear", () => {
@@ -165,7 +187,7 @@ describe("selectBenignCandidates", () => {
     ["pwd && ls", 10],
     ["git log --oneline -5", 5],
     // Screened out: prompt holds it manual.
-    ["sed -n '1,10p' README.md", 500],
+    ["tee out.txt", 500],
     // Screened out: carries an assignment.
     ["GIT_PAGER=cat git status --short --branch", 500],
   ]);
@@ -180,7 +202,7 @@ describe("selectBenignCandidates", () => {
 
   test("nothing the prompt holds manual is selected, however often it was run", async () => {
     const selected = await selectBenignCandidates({ counts, projectRoot: PROJECT_ROOT });
-    expect(selected.map((entry) => entry.command)).not.toContain("sed -n '1,10p' README.md");
+    expect(selected.map((entry) => entry.command)).not.toContain("tee out.txt");
     expect(selected.map((entry) => entry.command)).not.toContain("GIT_PAGER=cat git status --short --branch");
   });
 

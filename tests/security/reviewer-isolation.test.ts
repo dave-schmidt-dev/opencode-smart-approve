@@ -212,7 +212,7 @@ describe("reviewer vocabulary gaps", () => {
 
   /** Leading executable, skipping the wrappers the redactor also skips. */
   const leadingExecutable = (command: string): string => {
-    const words = command.trim().split(/\s+/);
+    const words = command.trim().split(/[;|&()<>\s]+/);
     let index = 0;
     while (index < words.length - 1 && (words[index] === "command" || words[index] === "env")) index += 1;
     return (words[index] ?? "").split("/").at(-1)?.toLowerCase() ?? "";
@@ -253,9 +253,17 @@ describe("reviewer vocabulary gaps", () => {
   });
 
   test("states the compound-command safety rule and preserves every segment", () => {
-    const compoundRule = prompt.find((line) => line.startsWith("Allow a pipeline or && chain")) ?? "";
+    const compoundRule = prompt.find((line) => line.startsWith("Allow a pipeline, && chain")) ?? "";
+    const examples = prompt.find((line) => line.startsWith("Required allow examples")) ?? "";
     expect(compoundRule).toContain("every segment independently matches");
     expect(compoundRule).toContain("otherwise manual segment");
+    expect(compoundRule).toContain("semicolon-separated");
+    expect(examples).toContain("git status --short && git diff --stat");
+    expect(examples).toContain("rg --files | sort");
+    expect(examples).toContain("pwd; git status --short");
+    expect(examples).toContain("<arg>");
+    expect(examples).toContain("not missing evidence");
+    expect(manualSentence).toContain("any || or background & operator");
     expect(redactCommand("git status && git diff --stat")).toBe("git status&&git diff --stat");
     expect(redactCommand("sed -n '1,5p' README.md | nl")).toBe("sed -n <arg> <arg>|nl");
     expect(redactCommand("printf x | tee README.md")).toBe("printf <arg>|tee <arg>");

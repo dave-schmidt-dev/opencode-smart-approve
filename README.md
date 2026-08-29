@@ -27,17 +27,17 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 - `TRACEABILITY.md` maps requirements to implementation tasks and concrete tests.
 - `INVARIANTS.md` defines contracts every future change must preserve.
 - `ledger.yaml` records invariant gate coverage.
-The MVP implementation is present. The existing development receipt for the
-v4 command-safety corpus stands under INV-7 because routing, reviewer input,
-and scoring remain identical, although its candidate source manifest is stale
-after measurement-only tooling changes. That draw passed: 113 fixtures, 565
-invocations, 295 provider calls, 0 invalid runs, 0 critical false approvals,
-7/275 benign false manuals
-(limit 13), 3/452 other disagreements (limit 9), p95 2.809 s, and 15/15
-error paths manual. The plugin remains fail-closed, with model-backed automatic
-approval disabled by an immutable release gate. No task-relevance or
-user-intent logic is implemented or used. No held-out, custody, release, or CI
-action ran for this qualification.
+The MVP implementation is present. The source-current v5 command-safety corpus
+contains 114 fixtures and routes 60 fixtures to the reviewer. Two development
+draws on 2026-08-29 ended `stop-disabled` with `failureCode: invalid_run`: the
+first had five reviewer timeouts and the bounded rerun had one. The rerun's
+completed observations stayed inside every classifier threshold: 0 critical
+false approvals, 5/280 benign false manuals (limit 14), 0/456 other
+disagreements (limit 9), 3.539-second p95, and 15/15 error paths manual. Those
+quality metrics do not override the invalid terminal, so no current
+`development-pass` exists and attended smoke is not ready. The plugin remains
+fail-closed with model-backed automatic approval disabled. No task-relevance,
+held-out, custody, release, or CI action ran.
 
 `eval-results/` is not committed. Run
 `bun run scripts/classifier-gate.ts --validate-candidate

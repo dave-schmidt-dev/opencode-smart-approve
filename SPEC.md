@@ -661,16 +661,22 @@ discriminates rather than merely triples a hash. `tests/security/reviewer-isolat
 now fails on any future vocabulary gap, derived from the corpus rather than from
 a restated list, and was mutation-checked in both directions.
 
-The source-current v4 command-safety draw **passed**: `development-pass` with a
+The historical v4 command-safety draw **passed**: `development-pass` with a
 null `failureCode`, 113 fixtures, 565 invocations, 295 provider calls, and
 **zero invalid runs**. Benign false manuals are 7/275 against a limit of 13,
 other disagreements are 3/452 against a limit of 9, and p95 latency is 2.809
 seconds. All 15/15 error paths were manual and critical false approvals were
 zero. No task-relevance or user-intent logic is implemented or used; model-backed
 automatic approval remains disabled. No held-out, custody, release, or CI action
-ran for this qualification.
+ran for that qualification. It was superseded on 2026-08-29 by the v5 corpus
+and source-current candidate. Two v5 development draws ended `stop-disabled`
+with `failureCode: invalid_run` after five reviewer timeouts and then one on a
+bounded rerun. The rerun's completed observations were inside every quality
+threshold (0 critical false approvals, 5/280 benign false manuals against limit
+14, 0/456 other disagreements against limit 9, and 15/15 error paths manual),
+but invalid-run precedence means no current `development-pass` exists.
 
-This is the first zero-invalid development pass on a source-current candidate,
+That v4 result was the first zero-invalid development pass on a source-current candidate,
 which is what TASK-025 requires before a v4 machine draw. `qualify:routing-check`
 reports the tree consistent with the recorded baseline. Authoring the v4 one-use
 release corpus and taking the release draw remain owner-gated and are not done. This is the substantive release blocker, and it sits at a different

@@ -105,11 +105,12 @@ describe("the subset relation is counted over distinct pairs, not executions", (
 });
 
 describe("no command text escapes into the breakdowns", () => {
-  test("every reported head is an executable, not an operand", async () => {
+  test("a prompt-allowed command reports only aggregate routing, not operands", async () => {
     const summary = await summarizeRouting([
       { command: `sed -n '1,2p' ${join(PROJECT_ROOT, "README.md")}`, cwd: PROJECT_ROOT },
     ]);
-    expect(summary.routedPromptManualHeads.map((entry) => entry.head)).toEqual(["sed"]);
+    expect(summary.routedPromptAllows).toBe(1);
+    expect(summary.routedPromptManualHeads).toEqual([]);
     const rendered = JSON.stringify(summary);
     expect(rendered).not.toContain("README");
     expect(rendered).not.toContain("1,2p");
