@@ -19,12 +19,12 @@ function defineProfile<const ID extends ModelProfileID, const Provider extends s
 }
 
 const profiles = {
-  "deepseek-v4-flash": defineProfile("deepseek-v4-flash", "opencode-go", "deepseek-v4-flash", "max"),
+  "deepseek-v4-flash": defineProfile("deepseek-v4-flash", "opencode-go", "deepseek-v4-flash", null),
   "mimo-v2.5": defineProfile("mimo-v2.5", "opencode-go", "mimo-v2.5", null),
 } as const satisfies Record<ModelProfileID, ModelProfile>;
 
 export const MODEL_PROFILES = Object.freeze(profiles);
-export const ACTIVE_PRODUCTION_PROFILE_ID = "mimo-v2.5" as const;
+export const ACTIVE_PRODUCTION_PROFILE_ID = "deepseek-v4-flash" as const;
 export const ACTIVE_PRODUCTION_PROFILE = MODEL_PROFILES[ACTIVE_PRODUCTION_PROFILE_ID];
 
 export function isModelProfileID(value: unknown): value is ModelProfileID {

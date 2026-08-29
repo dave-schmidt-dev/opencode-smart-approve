@@ -30,16 +30,14 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 The MVP implementation is present. The source-current v5 command-safety corpus
 contains 114 fixtures and routes 60 fixtures to the reviewer. Timeout
 attribution proved that a source-current DeepSeek `max` draw hit the local
-30-second deadline rather than an upstream timeout. The existing no-variant
-MiMo V2.5 profile is now active and completed a source-current
-`development-pass`: 570/570 classifier observations, 0 invalid runs, 0 critical
-false approvals, 6/280 benign false manuals (limit 14), 1/456 other
-disagreement (limit 9), 6.593-second p95, and 15/15 error paths manual. The
-attended OpenCode smoke passed 25 tests with one deliberate long-duration skip.
-Its one-use machine release draw then returned `machine-release-fail`: 6/70
-critical false approvals, 17/199 benign false manuals (limit 10), one malformed
-run, and 8.585-second p95 latency. Model-backed automatic approval remains
-disabled. No task-relevance or CI action ran.
+30-second deadline rather than an upstream timeout. The no-variant MiMo V2.5
+candidate completed a `development-pass` but its one-use machine release draw
+returned `machine-release-fail`: 6/70 critical false approvals, 17/199 benign
+false manuals (limit 10), one malformed run, and 8.585-second p95 latency.
+MiMo remains registered as failed historical evidence. The no-variant DeepSeek
+V4 Flash profile is now the disabled production default and next unqualified
+candidate. Model-backed automatic approval remains disabled. No task-relevance
+or CI action ran.
 
 `eval-results/` is not committed. Run
 `bun run scripts/classifier-gate.ts --validate-candidate
@@ -84,10 +82,10 @@ global OpenCode plugin loader for evaluation; keep native `bash: ask` enabled.
 `model.enabled=true` cannot enable automatic approvals in this release. Remove the
 loader entry to restore stock OpenCode; no session-data edit is required. OpenCode
 1.18.10 is the tested compatibility target, not a model qualification. DeepSeek
-V4 Flash remains the disabled production default. `src/reviewer/model-profile.ts`
-is the single registry for production and qualification identities; MiMo V2.5 is
-available as an A/B candidate and omits `variant` because OpenCode Go exposes no
-selectable variant for it.
+V4 Flash is the disabled production default and next unqualified candidate; its
+runtime request omits `variant`. `src/reviewer/model-profile.ts` is the single
+registry for production and qualification identities; MiMo V2.5 remains as
+failed historical evidence.
 
 ## Development verification
 
@@ -116,8 +114,9 @@ operation and public verification is not independently recomputable.
 After the offline evidence phase, the native candidate boundary is explicit:
 `bun run scripts/classifier-gate.ts --freeze-candidate eval-results/frozen-candidate-manifest.json`
 creates the sole source-current candidate, and `--validate-candidate` checks it.
-Add `--model-profile mimo-v2.5` to the freeze command for the MiMo A/B candidate;
-later validation and live qualification infer that frozen profile automatically.
+The default freeze selects no-variant DeepSeek; an explicit `--model-profile`
+selects another registered profile only for historical comparison. Later
+validation and live qualification infer that frozen profile automatically.
 Neither command reads the private release stream or enables model approval.
 
 The automated fresh-corpus rehearsal is deliberately non-authoritative:
@@ -228,8 +227,8 @@ The current release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`. `eval-results/` is not committed,
 so a fresh clone carries the commands that produce these artifacts but none of
 the artifacts themselves. The development report currently on disk is a
-source-current MiMo `development-pass` receipt. Release remains disabled because
-its candidate-bound release draw returned `machine-release-fail`.
+historical MiMo `development-pass` receipt. Release remains disabled because its
+candidate-bound release draw returned `machine-release-fail`.
 
 ## Verified OpenCode boundary
 

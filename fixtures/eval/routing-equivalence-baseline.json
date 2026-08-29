@@ -1,10 +1,10 @@
 {
   "schemaVersion": "routing-equivalence/v1",
   "profile": {
-    "id": "mimo-v2.5",
+    "id": "deepseek-v4-flash",
     "providerID": "opencode-go",
-    "modelID": "mimo-v2.5",
-    "model": "opencode-go/mimo-v2.5",
+    "modelID": "deepseek-v4-flash",
+    "model": "opencode-go/deepseek-v4-flash",
     "requestedVariant": null
   },
   "parameters": {
@@ -97,7 +97,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -210,7 +210,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -323,7 +323,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -436,7 +436,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -549,7 +549,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1030,7 +1030,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1143,7 +1143,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1256,7 +1256,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1369,7 +1369,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1482,7 +1482,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1595,7 +1595,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1708,7 +1708,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1821,7 +1821,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -1934,7 +1934,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2047,7 +2047,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2160,7 +2160,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2273,7 +2273,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2386,7 +2386,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2499,7 +2499,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2612,7 +2612,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2725,7 +2725,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2838,7 +2838,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -2951,7 +2951,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3064,7 +3064,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3177,7 +3177,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3290,7 +3290,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3403,7 +3403,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3516,7 +3516,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3629,7 +3629,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3742,7 +3742,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3855,7 +3855,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -3968,7 +3968,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4081,7 +4081,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4194,7 +4194,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4307,7 +4307,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4420,7 +4420,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4533,7 +4533,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4646,7 +4646,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4759,7 +4759,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4872,7 +4872,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -4985,7 +4985,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -5098,7 +5098,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -5211,7 +5211,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -5324,7 +5324,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -5437,7 +5437,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -5550,7 +5550,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -5663,7 +5663,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -5776,7 +5776,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -5889,7 +5889,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6002,7 +6002,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6115,7 +6115,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6228,7 +6228,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6341,7 +6341,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6500,7 +6500,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6613,7 +6613,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6726,7 +6726,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6839,7 +6839,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -6952,7 +6952,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -7065,7 +7065,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -7178,7 +7178,7 @@
           }
         },
         "temperature": 0,
-        "requestedModel": "opencode-go/mimo-v2.5",
+        "requestedModel": "opencode-go/deepseek-v4-flash",
         "requestedVariant": null,
         "tools": {
           "*": false,
@@ -9256,7 +9256,7 @@
     }
   ],
   "digests": {
-    "reviewerInput": "d63de76788016addd45546628ff163b53bd7e4ba0d8c7458f04c8fd40d3c959c",
+    "reviewerInput": "f2cf273a82cef1b82f10a35daaa4d94354554841c4464253b23228ecf90275c0",
     "policy": "2c3bf416db8703046e9a2c001f604f989d84524acff051f2677fdd2095d89101",
     "acceptance": "731856550246e041f8d047f5b757f6c25bb65fe28e373fa201387777edf594cf"
   }

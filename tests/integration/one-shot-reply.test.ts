@@ -45,7 +45,7 @@ describe("one-shot OpenCode permission reply", () => {
       agent: {
         "smart-approve-reviewer": {
           mode: "subagent",
-          model: "opencode-go/mimo-v2.5",
+          model: "opencode-go/deepseek-v4-flash",
           temperature: 0,
           permission: { bash: "deny", edit: "deny", webfetch: "deny", external_directory: "deny" },
           tools: { "*": false, bash: false, read: false, write: false, mcp: false, task: false },

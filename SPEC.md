@@ -1,6 +1,6 @@
 # SPEC: OpenCode Smart Approve
 
-Status: implemented MVP; MiMo release qualification failed
+Status: implemented MVP; MiMo release qualification failed; DeepSeek default is next unqualified candidate
 PlanningTier: impulse
 Target: OpenCode 1.18.10 on macOS and Linux
 License: MIT
@@ -23,9 +23,10 @@ The MVP is for a developer running OpenCode interactively who wants Codex- or
 Claude-like safe-command automation. The intended success case is routine low-risk
 commands proceeding without user action, every candidate command being reviewed by
 a qualified selected-profile reviewer, and no error path turning into an automatic
-approval. The current build does not meet that outcome: the source-current MiMo
-candidate passed development and attended smoke but failed its candidate-bound
-private release draw. Model-backed automatic approval remains disabled.
+approval. The current build does not meet that outcome: the MiMo candidate passed
+development and attended smoke but failed its candidate-bound private release
+draw. MiMo remains failed historical evidence; the no-variant DeepSeek default
+is the next unqualified candidate. Model-backed automatic approval remains disabled.
 
 ## 3. Scope
 
@@ -153,7 +154,7 @@ shell command executed; manual states leave that decision with OpenCode and the 
 - Description: Every command eligible for auto-approval must receive a successful
   model review.
 - Acceptance criteria:
-  - [ ] Disabled production default is the active entry in `src/reviewer/model-profile.ts` (currently `opencode-go/mimo-v2.5`, no requested variant).
+  - [ ] Disabled production default is the active entry in `src/reviewer/model-profile.ts` (currently `opencode-go/deepseek-v4-flash`, no requested variant).
   - [ ] Reviewer model, provider, optional variant, and timeout are configurable.
   - [ ] Reviewer receives only the redacted command representation, parser feature
     summary, policy facts, and project/external path classes.
@@ -493,9 +494,10 @@ flagged as a probable third systematic case, explicitly uninvestigated,
 because investigating it would require the same disclosure-risking probe
 used above and no further such probes are being run against this corpus.
 
-DeepSeek V4 Flash is not qualified and model-backed automatic approval must
-remain disabled. MiMo V2.5 also is not qualified: it passed the source-current
-development gate but failed its one-use release draw. The blocker is no longer purely a model/prompt-wording
+DeepSeek V4 Flash is the disabled production default and next unqualified
+candidate; model-backed automatic approval must remain disabled. MiMo V2.5 also
+is not qualified: it passed development but failed its one-use release draw and
+remains failed historical evidence. The blocker is no longer purely a model/prompt-wording
 question: it is a design contradiction between the reviewer prompt's
 conservative treatment of `env`/`cmp` and this specific corpus's benign
 labels for two fixtures using them, plus at least one unresolved zero-
@@ -508,11 +510,11 @@ partially spent regardless of which resolution is chosen: a fresh held-out
 corpus is required before any future qualification run can be treated as
 genuinely blind on the fixtures discussed above.
 
-Current qualification checkpoint (2026-08-29): run `--validate-candidate`
+Historical MiMo qualification checkpoint (2026-08-29): run `--validate-candidate`
 against `eval-results/frozen-candidate-manifest.json` and validate the bound
 development report rather than relying on this prose for currency. Candidate
-`dedaedca2f24f1da84a4b792948daea9ab2036082e323c804d9732ab5c5000db`
-selected `opencode-go/mimo-v2.5` and recorded `development-pass` across 570
+`dedaedca2f24f1da84a4b792948daea9ab2036082e323c804d9732ab5c5000db` is
+superseded; it selected `opencode-go/mimo-v2.5` and recorded `development-pass` across 570
 observations. Its release draw completed all 475 observations and returned
 `machine-release-fail`: 6/70 critical false approvals, 17/199 benign false
 manuals, one malformed run, 319 valid model results, no transport faults, and
@@ -538,8 +540,8 @@ disagreements, 0/200 benign false-manual observations, and 15/15 error-path
 manual observations. The report contains aggregate fields only, including a
 terminal-kind histogram. `validateDevelopmentCandidateReport` checks a report
 against both its candidate and the current source/config hashes, which this one
-passed when it was written. The current canonical path now holds the separate
-source-current MiMo pass described above.
+passed when it was written. The current canonical path now holds the historical
+MiMo pass described above.
 
 Every measurement above was taken against development corpus
 `2026-08-08-development-v2`, which held 95 fixtures sitting exactly on the
@@ -685,7 +687,7 @@ failed development draws. The release branch remains `release-disabled`, now on
 evidence rather than on authorship: the 2026-08-14 owner decision recorded under
 INV-9 accepts a `machine-adjudicated` corpus, so a fresh private human corpus,
 an independently bound adjudicator, and a human custodian are no longer
-preconditions. The current MiMo-bound machine corpus has one spent custody
+preconditions. The historical MiMo-bound machine corpus has one spent custody
 record and returned `machine-release-fail`. Both `release-operator.ts` and
 `machine-release.ts` require a source-current `development-pass` report bound to
 the same candidate and refuse any other terminal. The machine path validates
@@ -905,8 +907,9 @@ permission authority without schema, state, and deterministic hard-block checks.
 1. Shell permission requests only.
 2. Native `bash: ask` remains enabled.
 3. Every automatic approval requires model review; deterministic policy cannot grant.
-4. DeepSeek V4 Flash remains the disabled production default. Candidate profiles,
-   including MiMo V2.5, are not trusted until qualification and do not change it.
+4. No-variant DeepSeek V4 Flash is the disabled production default and next
+   unqualified candidate. MiMo V2.5 remains registered as failed historical
+   evidence and no profile is trusted until qualification.
 5. Repeated commands are re-evaluated and re-reviewed; verdicts are not cached.
 6. Automatic replies use `once` only.
 7. Default model timeout is 30 seconds and progress is visible.

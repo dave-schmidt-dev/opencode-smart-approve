@@ -189,7 +189,7 @@ describe("the diff reports the fixtures that moved", () => {
   });
 
   test("a model-profile change is reported at the snapshot level", () => {
-    const moved = { ...snapshot, profile: { ...snapshot.profile, modelID: "deepseek-v4-flash" } };
+    const moved = { ...snapshot, profile: { ...snapshot.profile, modelID: "mimo-v2.5" } };
     expect(diffSnapshots(snapshot, moved).some((difference) => difference.id === "<snapshot>" && difference.field === "profile")).toBe(true);
   });
 

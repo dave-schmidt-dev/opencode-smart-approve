@@ -28,7 +28,7 @@ describe("canonical reviewer contract", () => {
     const contract = buildReviewerContract({
       coordinatorID,
       providerID: "opencode-go",
-      modelID: "mimo-v2.5",
+      modelID: "deepseek-v4-flash",
       timeoutMs: 30_000,
       directory: "/project",
       parentSessionID: "parent-session",
@@ -40,7 +40,7 @@ describe("canonical reviewer contract", () => {
     expect(contract).toMatchObject({
       version: "classifier-qualification/v3",
       coordinatorID,
-      requestedModel: "opencode-go/mimo-v2.5",
+      requestedModel: "opencode-go/deepseek-v4-flash",
       temperature: 0,
       retryCount: 0,
       timeoutMs: 30_000,
@@ -239,8 +239,8 @@ describe("production/evaluation parity harness", () => {
     expect(validateParityReport(buildParityReport(production, evaluation))).toEqual({ accepted: true, errors: [] });
   });
 
-  test("keeps a no-variant MiMo candidate identical across production and evaluation plumbing", async () => {
-    const profile = MODEL_PROFILES["mimo-v2.5"];
+  test("keeps the no-variant DeepSeek production candidate identical across production and evaluation plumbing", async () => {
+    const profile = MODEL_PROFILES["deepseek-v4-flash"];
     const config = validateConfig({
       model: { enabled: false, provider: profile.providerID, model: profile.modelID, variant: undefined, timeoutMs: 30_000 },
     });
