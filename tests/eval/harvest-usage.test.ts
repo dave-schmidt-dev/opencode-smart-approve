@@ -15,12 +15,16 @@ import { join, resolve } from "node:path";
 import { buildReviewerPrompt } from "../../src/reviewer/prompt";
 import { evaluateDeterministicPolicy } from "../../src/policy/deterministic";
 import { structuralKey } from "../../scripts/qualification/structural-key";
+import { Database } from "bun:sqlite";
+import { parseBash } from "../../src/parser/bash-parser";
 import {
   PROMPT_ALLOWED_GIT_OPERATIONS,
   PROMPT_ALLOWED_HEADS,
   PROMPT_MANUAL_FLAGS,
   collectLocalCommands,
+  collectLocalExecutions,
   commandFamily,
+  decodeCodexWrapper,
   isPrintable,
   promptInstructsAllow,
   selectBenignCandidates,
@@ -241,5 +245,107 @@ describe("collectLocalCommands", () => {
     writeFileSync(join(home, ".claude/projects/.DS_Store"), "x");
     writeFileSync(join(home, ".claude/projects/real/s.jsonl"), `${JSON.stringify({ message: { content: [{ type: "tool_use", name: "Bash", input: { command: "pwd" } }] } })}\n`);
     expect(collectLocalCommands(home).get("pwd")).toBe(1);
+  });
+});
+
+describe("decodeCodexWrapper", () => {
+  test("synthetic double-quoted wrapper with escaped quotes and regex parentheses decodes to exact command and parses cleanly", async () => {
+    const raw = `/bin/zsh -lc "grep -E \\"([0-9]+)\\" file.txt"`;
+    const decoded = decodeCodexWrapper(raw);
+    expect(decoded).toBe('grep -E "([0-9]+)" file.txt');
+    const parse = await parseBash(decoded);
+    expect(parse.ok).toBe(true);
+
+    const raw2 = String.raw`/bin/bash -lc "rg -e \"^[a-zA-Z_]+(\\.[a-z]+)?$\" src/"`;
+    const decoded2 = decodeCodexWrapper(raw2);
+    expect(decoded2).toBe('rg -e "^[a-zA-Z_]+(\\.[a-z]+)?$" src/');
+    const parse2 = await parseBash(decoded2);
+    expect(parse2.ok).toBe(true);
+  });
+
+  test("synthetic single-quote splice wrapper decodes inner single quotes without executing substitutions", () => {
+    const raw = `/bin/zsh -lc 'echo '\\''hello world'\\'' && echo '\\''$(exit 1)'\\'''`;
+    const decoded = decodeCodexWrapper(raw);
+    expect(decoded).toBe("echo 'hello world' && echo '$(exit 1)'");
+
+    const rawDoubleQuoteSplice = `/bin/bash -lc 'echo '"'"'hello world'"'"' && echo '"'"'$(rm -rf /)'"'"''`;
+    const decodedDoubleQuoteSplice = decodeCodexWrapper(rawDoubleQuoteSplice);
+    expect(decodedDoubleQuoteSplice).toBe("echo 'hello world' && echo '$(rm -rf /)'");
+  });
+
+  test("malformed or unsupported wrapper shapes remain byte-identical", () => {
+    const cases = [
+      `/bin/zsh -lc 'echo hello`,
+      `/bin/zsh -lc "echo hello`,
+      `/bin/zsh -lc "echo $VAR"`,
+      `/bin/zsh -lc "echo $(whoami)"`,
+      '/bin/zsh -lc "echo ${USER}"',
+      `/bin/zsh -lc "echo \`id\`"`,
+      `/bin/zsh -lc 'echo hello"`,
+      `git status --short`,
+      `/usr/bin/python -c 'print(1)'`,
+      `/bin/zsh -lc 'echo ' hello'`,
+    ];
+    for (const raw of cases) {
+      expect(decodeCodexWrapper(raw)).toBe(raw);
+    }
+  });
+});
+
+describe("collectLocalExecutions", () => {
+  test("collects from Codex sqlite and decodes wrappers with timestamps", () => {
+    const home = tempHome();
+    const codexDir = join(home, ".codex");
+    mkdirSync(codexDir, { recursive: true });
+    const db = new Database(join(codexDir, "thread_history_1.sqlite"));
+    db.run(`CREATE TABLE thread_items (
+      thread_id TEXT, turn_id TEXT, item_id TEXT, rollout_ordinal INTEGER,
+      created_at_ms INTEGER, item_json TEXT, item_type TEXT
+    )`);
+    const t1 = 1755720000000;
+    const t2 = 1755723600000;
+    db.run(
+      `INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ["th1", "tu1", "it1", 1, t1, JSON.stringify({ command: `/bin/zsh -lc 'git status --short'`, cwd: "/tmp/project" }), "commandExecution"],
+    );
+    db.run(
+      `INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ["th1", "tu1", "it2", 2, t2, JSON.stringify({ command: `/bin/zsh -lc "grep -E \\"([0-9]+)\\" file.txt"`, cwd: "/tmp/project" }), "commandExecution"],
+    );
+    db.close();
+
+    const executions = collectLocalExecutions(home);
+    expect(executions.length).toBe(2);
+    expect(executions[0]).toEqual({
+      command: "git status --short",
+      cwd: "/tmp/project",
+      recordedAt: new Date(t1).toISOString(),
+    });
+    expect(executions[1]).toEqual({
+      command: 'grep -E "([0-9]+)" file.txt',
+      cwd: "/tmp/project",
+      recordedAt: new Date(t2).toISOString(),
+    });
+  });
+
+  test("collects from Claude jsonl and extracts timestamps", () => {
+    const home = tempHome();
+    const project = join(home, ".claude/projects/some-project");
+    mkdirSync(project, { recursive: true });
+    const ts = "2026-08-20T14:30:00.000Z";
+    const line = JSON.stringify({
+      timestamp: ts,
+      cwd: "/tmp/claude-proj",
+      message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git diff --stat" } }] },
+    });
+    writeFileSync(join(project, "session.jsonl"), `${line}\n`);
+
+    const executions = collectLocalExecutions(home);
+    expect(executions.length).toBe(1);
+    expect(executions[0]).toEqual({
+      command: "git diff --stat",
+      cwd: "/tmp/claude-proj",
+      recordedAt: ts,
+    });
   });
 });

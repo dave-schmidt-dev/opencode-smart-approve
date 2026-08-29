@@ -65,6 +65,68 @@ export interface HarvestedCommand {
 export interface LocalExecution {
   readonly command: string;
   readonly cwd?: string;
+  readonly recordedAt?: string;
+}
+
+/**
+ * Decode a Codex wrapper command (/bin/{ba,z}sh -lc <arg>) into the underlying command.
+ * Supports outer single- and double-quoted forms, including '\'' and '"'"' single-quote splices,
+ * without evaluating substitutions or executing harvested content.
+ * A double-quoted wrapper containing an unescaped expansion-capable $ or backtick
+ * is not exactly decodable and remains byte-identical.
+ * Malformed wrapper shapes also remain byte-identical.
+ */
+export function decodeCodexWrapper(command: string): string {
+  const match = /^\/bin\/(?:ba|z)?sh\s+-l?c\s+([\s\S]+)$/.exec(command);
+  if (!match) return command;
+  const rawArg = match[1]!.trim();
+  if (rawArg.length < 2) return command;
+
+  // Single-quoted wrapper: '...'
+  if (rawArg.startsWith("'") && rawArg.endsWith("'")) {
+    const inner = rawArg.slice(1, -1);
+    const SENTINEL = "\u0000";
+    const normalized = inner.replaceAll("'\\''", SENTINEL).replaceAll("'\"'\"'", SENTINEL);
+    if (normalized.includes("'")) return command;
+    return normalized.replaceAll(SENTINEL, "'");
+  }
+
+  // Double-quoted wrapper: "..."
+  if (rawArg.startsWith('"') && rawArg.endsWith('"')) {
+    const inner = rawArg.slice(1, -1);
+    let decoded = "";
+    for (let i = 0; i < inner.length; i++) {
+      const char = inner[i]!;
+      if (char === "\\") {
+        if (i + 1 >= inner.length) return command;
+        const next = inner[i + 1]!;
+        if (next === '"' || next === "\\" || next === "$" || next === "`") {
+          decoded += next;
+          i++;
+        } else if (next === "\n") {
+          i++;
+        } else {
+          decoded += "\\" + next;
+          i++;
+        }
+      } else if (char === '"') {
+        return command;
+      } else if (char === "`") {
+        return command;
+      } else if (char === "$") {
+        const next = i + 1 < inner.length ? inner[i + 1]! : "";
+        if (/^[a-zA-Z_0-9{(*@#?$!\-]/.test(next) || next === "'" || next === '"') {
+          return command;
+        }
+        decoded += "$";
+      } else {
+        decoded += char;
+      }
+    }
+    return decoded;
+  }
+
+  return command;
 }
 
 /**
@@ -192,11 +254,15 @@ export function commandFamily(command: string): string {
  */
 export function collectLocalExecutions(home = process.env.HOME ?? ""): readonly LocalExecution[] {
   const executions: LocalExecution[] = [];
-  const offer = (command: unknown, cwd?: unknown): void => {
+  const offer = (command: unknown, cwd?: unknown, recordedAt?: unknown): void => {
     if (typeof command !== "string") return;
     const key = command.trim();
     if (key.length === 0 || key.length > 400) return;
-    executions.push(typeof cwd === "string" && cwd.length > 0 ? { command: key, cwd } : { command: key });
+    executions.push({
+      command: key,
+      ...(typeof cwd === "string" && cwd.length > 0 ? { cwd } : {}),
+      ...(typeof recordedAt === "string" && recordedAt.length > 0 ? { recordedAt } : {}),
+    });
   };
 
   // Claude Code transcripts: one JSONL per session, Bash tool_use inputs.
@@ -213,12 +279,15 @@ export function collectLocalExecutions(home = process.env.HOME ?? ""): readonly 
       try { text = readFileSync(join(claudeDir, project, file), "utf8"); } catch { continue; }
       for (const line of text.split("\n")) {
         if (!line.includes('"Bash"')) continue;
-        let record: { cwd?: unknown; message?: { content?: unknown } };
+        let record: { cwd?: unknown; timestamp?: unknown; created_at?: unknown; message?: { content?: unknown } };
         try { record = JSON.parse(line) as typeof record; } catch { continue; }
         const content = record?.message?.content;
         if (!Array.isArray(content)) continue;
+        const timestamp = typeof record?.timestamp === "string"
+          ? record.timestamp
+          : (typeof record?.created_at === "string" ? record.created_at : undefined);
         for (const block of content as { type?: unknown; name?: unknown; input?: { command?: unknown } }[]) {
-          if (block?.type === "tool_use" && block?.name === "Bash") offer(block?.input?.command, record?.cwd);
+          if (block?.type === "tool_use" && block?.name === "Bash") offer(block?.input?.command, record?.cwd, timestamp);
         }
       }
     }
@@ -229,14 +298,16 @@ export function collectLocalExecutions(home = process.env.HOME ?? ""): readonly 
   // into memory but never inspected — only `command` is touched.
   try {
     const db = new Database(join(home, ".codex/thread_history_1.sqlite"), { readonly: true });
-    const rows = db.query("SELECT item_json FROM thread_items WHERE item_type = 'commandExecution'").all() as { item_json: string }[];
+    const rows = db.query("SELECT item_json, created_at_ms FROM thread_items WHERE item_type = 'commandExecution'").all() as { item_json: string; created_at_ms?: number }[];
     for (const row of rows) {
-      let item: { command?: unknown; cwd?: unknown };
+      let item: { command?: unknown; cwd?: unknown; createdAt?: unknown; timestamp?: unknown };
       try { item = JSON.parse(row.item_json) as typeof item; } catch { continue; }
       if (typeof item?.command !== "string") continue;
-      // Codex wraps every call as `/bin/zsh -lc '<real command>'`.
-      const unwrapped = /^\/bin\/(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(item.command);
-      offer(unwrapped ? unwrapped[2]! : item.command, item?.cwd);
+      const unwrapped = decodeCodexWrapper(item.command);
+      const recordedAt = typeof row.created_at_ms === "number" && !isNaN(row.created_at_ms)
+        ? new Date(row.created_at_ms).toISOString()
+        : (typeof item?.createdAt === "string" ? item.createdAt : (typeof item?.timestamp === "string" ? item.timestamp : undefined));
+      offer(unwrapped, item?.cwd, recordedAt);
     }
     db.close();
   } catch { /* absent database is not an error */ }

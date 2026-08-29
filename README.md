@@ -27,9 +27,12 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 - `TRACEABILITY.md` maps requirements to implementation tasks and concrete tests.
 - `INVARIANTS.md` defines contracts every future change must preserve.
 - `ledger.yaml` records invariant gate coverage.
-The MVP implementation is present. A source-current development draw for the
-v4 command-safety corpus passed: 113 fixtures, 565 invocations, 295 provider
-calls, 0 invalid runs, 0 critical false approvals, 7/275 benign false manuals
+The MVP implementation is present. The existing development receipt for the
+v4 command-safety corpus stands under INV-7 because routing, reviewer input,
+and scoring remain identical, although its candidate source manifest is stale
+after measurement-only tooling changes. That draw passed: 113 fixtures, 565
+invocations, 295 provider calls, 0 invalid runs, 0 critical false approvals,
+7/275 benign false manuals
 (limit 13), 3/452 other disagreements (limit 9), p95 2.809 s, and 15/15
 error paths manual. The plugin remains fail-closed, with model-backed automatic
 approval disabled by an immutable release gate. No task-relevance or
@@ -156,6 +159,14 @@ which records per-stratum whether a command was authored or harvested.
 `scripts/qualification/measure-routing.ts` reports what share of real executions
 reach the reviewer at all. None of these enables model approval; a passing draw
 is a precondition for flipping the gate, not the flip itself.
+
+`bun run analyze:parser-history --cutoff <ISO-8601-timestamp>` reproduces the
+aggregate parser-history diagnostic at an inclusive upper cutoff. Records with
+missing or invalid timestamps are excluded. The collector decodes supported
+Codex shell-wrapper quoting without executing harvested text; unsupported or
+ambiguous wrapper shapes remain unchanged. Progress goes to stderr and stdout
+contains only aggregate counts, never commands, operands, paths, hashes, prompts,
+responses, or secrets. The diagnostic does not change parser or approval policy.
 
 The machine path is rehearsed offline before it is ever run for real.
 `tests/eval/machine-release-rehearsal.test.ts` drives `runMachineRelease`

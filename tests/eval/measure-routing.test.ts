@@ -115,3 +115,24 @@ describe("no command text escapes into the breakdowns", () => {
     expect(rendered).not.toContain("1,2p");
   });
 });
+
+describe("unsupported constructs and parser failures remain manual", () => {
+  test("unsupported constructs and parser failures are evaluated and not routed to model review", async () => {
+    const commands = [
+      "case x in y) echo y;; esac",
+      "[[ -f README.md ]]",
+      "! echo hi",
+      "if true; then echo hi; fi",
+      "echo (",
+      "echo |",
+      "echo\u0000x",
+    ];
+    const executions: LocalExecution[] = commands.map((command) => ({ command, cwd: PROJECT_ROOT }));
+    const summary = await summarizeRouting(executions);
+
+    expect(summary.evaluated).toBe(commands.length);
+    expect(summary.routed).toBe(0);
+    expect(summary.routedPromptAllows).toBe(0);
+    expect(summary.routedPromptManual).toBe(0);
+  });
+});
