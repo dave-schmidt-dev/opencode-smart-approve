@@ -1,6 +1,6 @@
 # SPEC: OpenCode Smart Approve
 
-Status: implemented MVP; private release qualification blocked
+Status: implemented MVP; MiMo release qualification failed
 PlanningTier: impulse
 Target: OpenCode 1.18.10 on macOS and Linux
 License: MIT
@@ -23,13 +23,9 @@ The MVP is for a developer running OpenCode interactively who wants Codex- or
 Claude-like safe-command automation. The intended success case is routine low-risk
 commands proceeding without user action, every candidate command being reviewed by
 a qualified selected-profile reviewer, and no error path turning into an automatic
-approval. The current build does not meet that outcome: private release
-qualification is incomplete.
-The development branch was re-run against a frozen candidate and completed its
-aggregate pass, but that candidate is superseded and its receipt no longer
-exists on disk (see the recovery checkpoint below). No source-current
-development pass is bound to the current freeze, and private release
-qualification remains incomplete.
+approval. The current build does not meet that outcome: the source-current MiMo
+candidate passed development and attended smoke but failed its candidate-bound
+private release draw. Model-backed automatic approval remains disabled.
 
 ## 3. Scope
 
@@ -498,8 +494,8 @@ because investigating it would require the same disclosure-risking probe
 used above and no further such probes are being run against this corpus.
 
 DeepSeek V4 Flash is not qualified and model-backed automatic approval must
-remain disabled. MiMo V2.5 is an A/B candidate, not the production default, and
-has no qualification evidence yet. The blocker is no longer purely a model/prompt-wording
+remain disabled. MiMo V2.5 also is not qualified: it passed the source-current
+development gate but failed its one-use release draw. The blocker is no longer purely a model/prompt-wording
 question: it is a design contradiction between the reviewer prompt's
 conservative treatment of `env`/`cmp` and this specific corpus's benign
 labels for two fixtures using them, plus at least one unresolved zero-
@@ -512,25 +508,28 @@ partially spent regardless of which resolution is chosen: a fresh held-out
 corpus is required before any future qualification run can be treated as
 genuinely blind on the fixtures discussed above.
 
-Current recovery checkpoint (2026-08-25): every hash named in this paragraph is
-superseded, and each is retained only to identify which artifact a past
-measurement was taken against. For the current freeze, run `--validate-candidate`
-against `eval-results/frozen-candidate-manifest.json`. This document
-deliberately does not record the verdict: a freeze goes stale as soon as a file
-in its source manifest changes, so any verdict written here is true only until
-the next commit, and writing one is how three documents came to name three
-different current freezes. No development draw has been run against it.
+Current qualification checkpoint (2026-08-29): run `--validate-candidate`
+against `eval-results/frozen-candidate-manifest.json` and validate the bound
+development report rather than relying on this prose for currency. Candidate
+`dedaedca2f24f1da84a4b792948daea9ab2036082e323c804d9732ab5c5000db`
+selected `opencode-go/mimo-v2.5` and recorded `development-pass` across 570
+observations. Its release draw completed all 475 observations and returned
+`machine-release-fail`: 6/70 critical false approvals, 17/199 benign false
+manuals, one malformed run, 319 valid model results, no transport faults, and
+8.585-second p95 latency. The production lock remains false.
+
+The older hashes below are superseded and retained only to identify historical
+measurements.
 `b3503bf5f8e1aff83a9ce4196e5a592c878995bc45ac1503de4dba2944fac773` is
 superseded: it named an earlier freeze that this document once described as
 current, and the correction came from a person reading the file rather than
 from a gate.
-The DeepSeek development draw recorded below was bound to
+The historical DeepSeek development draw recorded below was bound to
 `d419a4f7215d4cea1d284580f46eaf5c4ff8cc46235d1f57174330c6ddb0c8c5`, which
 `--validate-candidate` reports stale because routing and policy changed after
-that freeze. That receipt has since been overwritten at
-`eval-results/development-candidate-report.json` by a failed MiMo V2.5
-comparison and cannot be recovered, so what follows records what was measured
-and reported at the time rather than evidence that can be re-verified. That
+that freeze. Its canonical receipt was overwritten and cannot be recovered, so
+what follows records what was measured and reported at the time rather than
+evidence that can be re-verified. That
 aggregate development report is `development-pass`: 95 fixtures, five
 repeats, 475 invocations, 225 valid provider calls, 475 classifier-denominator
 observations, zero invalid runs, and 2.799-second p95 latency. It has zero
@@ -539,11 +538,8 @@ disagreements, 0/200 benign false-manual observations, and 15/15 error-path
 manual observations. The report contains aggregate fields only, including a
 terminal-kind histogram. `validateDevelopmentCandidateReport` checks a report
 against both its candidate and the current source/config hashes, which this one
-passed when it was written. It can no longer be re-validated at all, because the
-fixed path that held it now holds the MiMo comparison. Validating what is there
-today against the current freeze fails with `development report candidate
-binding is stale`. That is staleness plus overwrite, not a defect in either
-report.
+passed when it was written. The current canonical path now holds the separate
+source-current MiMo pass described above.
 
 Every measurement above was taken against development corpus
 `2026-08-08-development-v2`, which held 95 fixtures sitting exactly on the
@@ -677,22 +673,20 @@ observations, 0 invalid runs, 0 critical false approvals, 6/280 benign false
 manuals against limit 14, 1/456 other disagreement against limit 9,
 6.593-second p95 latency, and 15/15 error paths manual.
 
-That v4 result was the first zero-invalid development pass on a source-current candidate,
-which is what TASK-025 requires before a v4 machine draw. `qualify:routing-check`
-reports the tree consistent with the recorded baseline. Authoring the v4 one-use
-release corpus and taking the release draw remain owner-gated and are not done. This is the substantive release blocker, and it sits at a different
-layer from TASK-018: that task counts commands the deterministic policy refuses
-to route, while this counts benign commands the reviewer itself then holds.
+That development result cleared the precondition for a candidate-bound machine
+draw. `qualify:routing-check` reported the tree consistent with the recorded
+baseline. The attended smoke, fresh corpus authoring, preflight, and one-use draw
+subsequently completed; the release result above rejected MiMo.
 
 The exact-runtime candidate canary, public-synthetic custody/parity suites,
 offline/package/spec gates, and OpenCode 1.18.10 integration and contract
 canaries pass. The failure-only no-corpus terminal branch remains available for
-failed development draws, and the report currently on disk is one such failure. The release branch remains `release-disabled`, now on
+failed development draws. The release branch remains `release-disabled`, now on
 evidence rather than on authorship: the 2026-08-14 owner decision recorded under
 INV-9 accepts a `machine-adjudicated` corpus, so a fresh private human corpus,
 an independently bound adjudicator, and a human custodian are no longer
-preconditions. Two machine-adjudicated draws have been spent and the most recent
-returned `machine-release-fail`. Both `release-operator.ts` and
+preconditions. The current MiMo-bound machine corpus has one spent custody
+record and returned `machine-release-fail`. Both `release-operator.ts` and
 `machine-release.ts` require a source-current `development-pass` report bound to
 the same candidate and refuse any other terminal. The machine path validates
 that report before ledger initialization/spend and before reading private corpus

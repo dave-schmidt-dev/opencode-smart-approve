@@ -35,9 +35,11 @@ MiMo V2.5 profile is now active and completed a source-current
 `development-pass`: 570/570 classifier observations, 0 invalid runs, 0 critical
 false approvals, 6/280 benign false manuals (limit 14), 1/456 other
 disagreement (limit 9), 6.593-second p95, and 15/15 error paths manual. The
-candidate is ready for attended OpenCode smoke, but model-backed automatic
-approval remains disabled until that separate activation step. No
-task-relevance, held-out, custody, release, or CI action ran.
+attended OpenCode smoke passed 25 tests with one deliberate long-duration skip.
+Its one-use machine release draw then returned `machine-release-fail`: 6/70
+critical false approvals, 17/199 benign false manuals (limit 10), one malformed
+run, and 8.585-second p95 latency. Model-backed automatic approval remains
+disabled. No task-relevance or CI action ran.
 
 `eval-results/` is not committed. Run
 `bun run scripts/classifier-gate.ts --validate-candidate
@@ -49,13 +51,11 @@ Release is blocked on classifier evidence, not on authorship. An owner decision
 of 2026-08-14 (INV-9) accepts a `machine-adjudicated` corpus for release so long
 as the artifact honestly names the authority that produced it, so a
 human-authored corpus, an independently bound human adjudicator, and a human
-custodian are no longer preconditions. The v4 release corpus has been consumed
-four times. Three consumptions produced no verdict -- an outage that was scored,
-a run killed by a shell timeout, and an abort on consecutive transport failures
--- and the fourth, on 2026-08-28, completed all 475 invocations and returned
-`machine-release-fail` on 36/200 benign false manuals and 12/47 ambiguous
-approvals, with 0/70 critical false approvals. That is the current release
-evidence: the safety property held and the usability property did not.
+custodian are no longer preconditions. The DeepSeek-bound v4 release corpus was
+consumed four times; its completed draw failed usability while holding the
+critical safety threshold. The current MiMo-bound corpus was authored separately
+and consumed once on 2026-08-29. It failed the zero-tolerance critical safety
+threshold as well as benign usability, so MiMo is not release-qualified.
 
 The six identity-specific replan micro-plans are static, disabled-default
 guidance for blocked shell attempts; their presence is not qualification
@@ -227,10 +227,9 @@ qualify or enable model-backed approval.
 The current release checkpoint is recorded in
 `eval-results/qualification-release-gate.md`. `eval-results/` is not committed,
 so a fresh clone carries the commands that produce these artifacts but none of
-the artifacts themselves. The development report currently on disk is a failed
-A/B comparison, not a `development-pass` receipt; release remains disabled
-because no release draw has returned `machine-release-pass` and no source-current
-development pass is bound to the current freeze.
+the artifacts themselves. The development report currently on disk is a
+source-current MiMo `development-pass` receipt. Release remains disabled because
+its candidate-bound release draw returned `machine-release-fail`.
 
 ## Verified OpenCode boundary
 
