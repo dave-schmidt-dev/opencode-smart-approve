@@ -157,7 +157,7 @@ shell command executed; manual states leave that decision with OpenCode and the 
 - Description: Every command eligible for auto-approval must receive a successful
   model review.
 - Acceptance criteria:
-  - [ ] Disabled production default is the active entry in `src/reviewer/model-profile.ts` (currently `opencode-go/deepseek-v4-flash`, variant `max`).
+  - [ ] Disabled production default is the active entry in `src/reviewer/model-profile.ts` (currently `opencode-go/mimo-v2.5`, no requested variant).
   - [ ] Reviewer model, provider, optional variant, and timeout are configurable.
   - [ ] Reviewer receives only the redacted command representation, parser feature
     summary, policy facts, and project/external path classes.
@@ -669,12 +669,13 @@ seconds. All 15/15 error paths were manual and critical false approvals were
 zero. No task-relevance or user-intent logic is implemented or used; model-backed
 automatic approval remains disabled. No held-out, custody, release, or CI action
 ran for that qualification. It was superseded on 2026-08-29 by the v5 corpus
-and source-current candidate. Two v5 development draws ended `stop-disabled`
-with `failureCode: invalid_run` after five reviewer timeouts and then one on a
-bounded rerun. The rerun's completed observations were inside every quality
-threshold (0 critical false approvals, 5/280 benign false manuals against limit
-14, 0/456 other disagreements against limit 9, and 15/15 error paths manual),
-but invalid-run precedence means no current `development-pass` exists.
+and source-current candidate. Four DeepSeek `max` draws ended `stop-disabled`
+on reviewer deadlines. After bounded timeout attribution identified the local
+30-second deadline, the already-registered no-variant MiMo V2.5 profile was
+promoted and completed a source-current `development-pass`: 570/570 classifier
+observations, 0 invalid runs, 0 critical false approvals, 6/280 benign false
+manuals against limit 14, 1/456 other disagreement against limit 9,
+6.593-second p95 latency, and 15/15 error paths manual.
 
 That v4 result was the first zero-invalid development pass on a source-current candidate,
 which is what TASK-025 requires before a v4 machine draw. `qualify:routing-check`
@@ -707,7 +708,7 @@ owner instruction that the existing subscriptions be used instead. Authoring now
 runs `gpt-5.6-terra` at reasoning effort `high` through `~/.agent/bin/codex-headless`,
 recorded in provenance as `openai/gpt-5.6-terra`. Two things changed with it.
 The independence requirement is better satisfied than before: the author must
-not share a blind spot with the classifier under test (`opencode-go/deepseek-v4-flash`),
+not share a blind spot with the classifier under test (`opencode-go/mimo-v2.5`),
 and it should also not share one with whatever wrote the reviewer prompt, which
 Claude did -- an OpenAI author is independent of both sides rather than only of
 the measured one. And the provenance shape changed to stay honest: Codex has no

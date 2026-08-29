@@ -28,16 +28,16 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 - `INVARIANTS.md` defines contracts every future change must preserve.
 - `ledger.yaml` records invariant gate coverage.
 The MVP implementation is present. The source-current v5 command-safety corpus
-contains 114 fixtures and routes 60 fixtures to the reviewer. Two development
-draws on 2026-08-29 ended `stop-disabled` with `failureCode: invalid_run`: the
-first had five reviewer timeouts and the bounded rerun had one. The rerun's
-completed observations stayed inside every classifier threshold: 0 critical
-false approvals, 5/280 benign false manuals (limit 14), 0/456 other
-disagreements (limit 9), 3.539-second p95, and 15/15 error paths manual. Those
-quality metrics do not override the invalid terminal, so no current
-`development-pass` exists and attended smoke is not ready. The plugin remains
-fail-closed with model-backed automatic approval disabled. No task-relevance,
-held-out, custody, release, or CI action ran.
+contains 114 fixtures and routes 60 fixtures to the reviewer. Timeout
+attribution proved that a source-current DeepSeek `max` draw hit the local
+30-second deadline rather than an upstream timeout. The existing no-variant
+MiMo V2.5 profile is now active and completed a source-current
+`development-pass`: 570/570 classifier observations, 0 invalid runs, 0 critical
+false approvals, 6/280 benign false manuals (limit 14), 1/456 other
+disagreement (limit 9), 6.593-second p95, and 15/15 error paths manual. The
+candidate is ready for attended OpenCode smoke, but model-backed automatic
+approval remains disabled until that separate activation step. No
+task-relevance, held-out, custody, release, or CI action ran.
 
 `eval-results/` is not committed. Run
 `bun run scripts/classifier-gate.ts --validate-candidate

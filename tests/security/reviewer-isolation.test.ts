@@ -58,7 +58,7 @@ describe("reviewer isolation", () => {
     });
     expect(Object.keys(createInput.body)).toEqual(["title"]);
     expect(promptInput.body.agent).toBe("smart-approve-reviewer");
-    expect(promptInput.body.model).toEqual({ providerID: "opencode-go", modelID: "deepseek-v4-flash" });
+    expect(promptInput.body.model).toEqual({ providerID: "opencode-go", modelID: "mimo-v2.5" });
     expect(promptInput.body.format).toMatchObject({ type: "json_schema", retryCount: 0, schema: { additionalProperties: false } });
     expect(promptInput.body.variant).toBeUndefined();
     expect(promptInput.body.tools["*"]).toBe(false);

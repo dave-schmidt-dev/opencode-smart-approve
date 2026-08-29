@@ -101,6 +101,7 @@ describe("isolated reviewer decisions", () => {
 
     expect(result.decision).toBe("manual");
     expect(result.reasonCodes).toEqual(["timeout"]);
+    expect(result.reason).toBe("reviewer_deadline");
     expect(result.outcome?.kind).toBe("timeout");
     expect(calls.filter((call) => call.method === "abort").map((call) => call.input)).toEqual([
       { path: { id: "exact-timeout-child" }, query: { directory: "/project" } },
@@ -108,5 +109,16 @@ describe("isolated reviewer decisions", () => {
     expect(calls.filter((call) => call.method === "delete").map((call) => call.input)).toEqual([
       { path: { id: "exact-timeout-child" }, query: { directory: "/project" } },
     ]);
+  });
+
+  test("upstream timeout errors are attributed without exposing provider text", async () => {
+    const failing = client(undefined);
+    failing.session.prompt = async () => { throw new Error("CANARY_SECRET_VALUE upstream request timeout"); };
+    const result = await createReviewerAgent({ client: failing }).review({ requestID: "upstream-timeout", prompt: "echo hello" });
+
+    expect(result.decision).toBe("manual");
+    expect(result.reasonCodes).toEqual(["timeout"]);
+    expect(result.reason).toBe("upstream_timeout");
+    expect(JSON.stringify(result)).not.toContain("CANARY_SECRET_VALUE");
   });
 });

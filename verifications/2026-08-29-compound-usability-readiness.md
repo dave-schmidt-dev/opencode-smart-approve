@@ -2,9 +2,10 @@
 
 ## Result
 
-**Not ready for attended OpenCode smoke.** The implementation and offline gates
-are green, but the source-current development gate is not: both attempts ended
-`stop-disabled` with `failureCode: invalid_run` because reviewer calls timed out.
+**Ready for attended OpenCode smoke.** Timeout attribution identified the
+plugin-owned 30-second deadline under the DeepSeek `max` profile. The existing
+no-variant MiMo V2.5 profile is now active and completed a source-current
+`development-pass` with zero invalid runs.
 
 ## Implemented
 
@@ -18,18 +19,17 @@ are green, but the source-current development gate is not: both attempts ended
 
 ## Evidence
 
-- Focused gate: 55 tests passed; typecheck passed.
-- Full local gate: 483 offline tests and 3 package tests passed; typecheck,
-  spec guard, and routing equivalence passed.
-- Development attempt 1: invalid, 5 timeouts.
-- Development attempt 2: invalid, 1 timeout; completed observations recorded
-  0 critical false approvals, 5/280 benign false manuals (limit 14), 0/456
-  other disagreements (limit 9), 3.539-second p95, and 15/15 error paths manual.
-- Independent read-only verification confirmed the prompt/mirror/operator
-  behavior and the invalid-run interpretation.
+- Full local gate: 486 offline tests and 3 package tests passed; typecheck,
+  spec guard, package smoke, and routing equivalence passed.
+- OpenCode 1.18.10 contract canary: 28 passed, 1 long-duration test skipped.
+- DeepSeek attribution draw: invalid, 4 `reviewer_deadline` timeouts; no upstream
+  timeout signal.
+- Canonical MiMo draw: `development-pass`, 570/570 observations, 300 provider
+  calls, 0 invalid runs, 0 critical false approvals, 6/280 benign false manuals
+  (limit 14), 1/456 other disagreement (limit 9), 6.593-second p95,
+  18.107-second max, and 15/15 error paths manual.
 
 ## Boundary
 
 No CI, held-out/release evaluation, plugin activation, configuration enablement,
-or production action ran. The next gate is a zero-invalid source-current
-`development-pass`; only then should attended OpenCode smoke be run.
+or production action ran. The next gate is attended OpenCode smoke.

@@ -24,7 +24,7 @@ const profiles = {
 } as const satisfies Record<ModelProfileID, ModelProfile>;
 
 export const MODEL_PROFILES = Object.freeze(profiles);
-export const ACTIVE_PRODUCTION_PROFILE_ID = "deepseek-v4-flash" as const;
+export const ACTIVE_PRODUCTION_PROFILE_ID = "mimo-v2.5" as const;
 export const ACTIVE_PRODUCTION_PROFILE = MODEL_PROFILES[ACTIVE_PRODUCTION_PROFILE_ID];
 
 export function isModelProfileID(value: unknown): value is ModelProfileID {

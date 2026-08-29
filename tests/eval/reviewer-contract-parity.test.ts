@@ -230,7 +230,7 @@ describe("production/evaluation parity harness", () => {
     expect(production.create.count).toBe(1);
     expect(production.create.parentLinked).toBe(true);
     expect(production.prompt.count).toBe(1);
-    expect(production.registration.variant).toBe("max");
+    expect(production.registration.variant).toBeUndefined();
     expect(production.prompt.variant).toBeUndefined();
     expect(production.terminal).toEqual({ state: "manual", outcomeKind: "valid_model", approvalCalls: 0 });
     const serialized = JSON.stringify(buildParityReport(production, evaluation));

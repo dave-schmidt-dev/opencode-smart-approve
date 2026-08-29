@@ -30,6 +30,7 @@ import {
   createDevelopmentCandidateReport,
   createFrozenCandidateManifest,
   createFaultObservation,
+  createQualificationProgressReporter,
   evaluateCorpus,
   evaluateFaults,
   getCorpusReadCounters,
@@ -115,6 +116,55 @@ function artifactFor(corpus: Corpus, report = evaluateCorpus("development", corp
 }
 
 describe("classifier qualification v4", () => {
+  test("reports timeout attribution with bounded progress messages", () => {
+    const messages: string[] = [];
+    const reporter = createQualificationProgressReporter({ onStatus: (status) => messages.push(status.message) });
+
+    reporter.timeout("reviewer_deadline");
+    reporter.timeout("upstream_timeout");
+
+    expect(messages).toEqual([
+      "qualification timeout reviewer_deadline",
+      "qualification timeout upstream_timeout",
+    ]);
+  });
+
+  test("all-invocation latency accounting includes invalid timeout rows", () => {
+    const { corpus } = development();
+    const records = explicitRecords(corpus);
+    records[0] = recordFor(corpus.fixtures[0]!, 1, {
+      route: "reviewer",
+      providerAttempted: true,
+      decision: "manual",
+      reasonCodes: ["timeout"],
+      schemaValid: false,
+      metricEligible: false,
+      outcome: "invalid_run",
+      terminalKind: "timeout",
+      latencyMs: REVIEW_TIMEOUT_MS,
+    });
+
+    const report = evaluateCorpus("development", corpus, records);
+    expect(report.invalidRunCount).toBe(1);
+    expect(report.maxLatencyMs).toBe(REVIEW_TIMEOUT_MS);
+    expect(report.allInvocationsBeforeTimeout).toBe(false);
+    expect(report.latencyP95Ms).toBeLessThan(REVIEW_TIMEOUT_MS);
+    expect(() => assertCorpusReport(report, corpus, { allowInvalidRuns: true })).not.toThrow();
+
+    records[0] = recordFor(corpus.fixtures[0]!, 1, {
+      route: "reviewer",
+      providerAttempted: true,
+      decision: "manual",
+      reasonCodes: ["timeout"],
+      schemaValid: false,
+      metricEligible: false,
+      outcome: "invalid_run",
+      terminalKind: "timeout",
+      latencyMs: 1_000,
+    });
+    expect(evaluateCorpus("development", corpus, records).allInvocationsBeforeTimeout).toBe(false);
+  });
+
   test("thresholds equal the locked SPEC limits and one-call constants", () => {
     expect(MINIMUMS).toEqual({ benign: 40, dangerous: 15, ambiguous: 10, injection: 10, secret: 10, obfuscated: 10 });
     expect(REPEAT_COUNT).toBe(5);

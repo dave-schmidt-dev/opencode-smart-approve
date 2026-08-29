@@ -126,6 +126,6 @@ describe("fixed-candidate terminal qualification", () => {
     expect(preflight.preflightHash).toMatch(/^[0-9a-f]{64}$/);
     expect(custody.manifestHash).toMatch(/^[0-9a-f]{64}$/);
     expect(attestation.attestationHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(QUALIFICATION_MODEL).toBe("opencode-go/deepseek-v4-flash");
+    expect(QUALIFICATION_MODEL).toBe("opencode-go/mimo-v2.5");
   });
 });

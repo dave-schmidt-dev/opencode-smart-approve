@@ -484,6 +484,7 @@ export function writeDevelopmentCandidateReport(path: string, report: Developmen
 
 export type QualificationProgressPhase = "startup" | "development" | "release" | "teardown";
 export type QualificationProgressState = "started" | "progress" | "finished";
+export type ReviewerTimeoutSource = "reviewer_deadline" | "upstream_timeout";
 
 export interface QualificationProgressStatus {
   readonly phase: QualificationProgressPhase;
@@ -497,6 +498,7 @@ export interface QualificationProgressStatus {
 export interface QualificationProgressReporter {
   readonly start: (phase: QualificationProgressPhase) => void;
   readonly update: (phase: QualificationProgressPhase, completed: number, total: number) => void;
+  readonly timeout: (source: ReviewerTimeoutSource) => void;
   readonly finish: (phase: QualificationProgressPhase, message?: string) => void;
 }
 
@@ -513,6 +515,7 @@ export function createQualificationProgressReporter(options: {
   return {
     start: (phase) => emit({ phase, state: "started", message: `qualification ${phase} started`, token: `progress_${randomUUID()}` }),
     update: (phase, completed, total) => emit({ phase, state: "progress", message: `qualification ${phase} progress`, completed: Math.max(0, Math.floor(completed)), total: Math.max(0, Math.floor(total)), token: `progress_${randomUUID()}` }),
+    timeout: (source) => emit({ phase: "development", state: "progress", message: `qualification timeout ${source}`, token: `progress_${randomUUID()}` }),
     finish: (phase, message = `qualification ${phase} finished`) => emit({ phase, state: "finished", message, token: `progress_${randomUUID()}` }),
   };
 }
@@ -733,6 +736,9 @@ async function produceLiveQualification(path: string, candidate: FrozenCandidate
             terminalKind = "valid_model";
           } else {
             terminalKind = kind === "provider_error" && !providerAttempted ? "session_create_error" : terminalKindFor(kind);
+            if (terminalKind === "timeout" && (result.reason === "reviewer_deadline" || result.reason === "upstream_timeout")) {
+              qualificationProgress.timeout(result.reason);
+            }
             schemaValid = false;
             metricEligible = false;
             outcome = "invalid_run";

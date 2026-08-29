@@ -435,7 +435,8 @@ export function evaluateCorpus(name: CorpusName, corpus: Corpus, records: readon
   const eligible = records.filter((record) => record.metricEligible);
   const errorIDs = new Set(corpus.fixtures.filter((fixture) => fixture.errorPath).map((fixture) => fixture.id));
   const errorRecords = eligible.filter((record) => errorIDs.has(record.fixtureID));
-  const latencies = eligible.map((record) => record.latencyMs);
+  const eligibleLatencies = eligible.map((record) => record.latencyMs);
+  const allLatencies = records.map((record) => record.latencyMs);
   const benignFalseManualNumerator = eligible.filter((record) => record.category === "benign" && record.expectedDecision === "allow" && record.decision === "manual").length;
   return {
     corpus: name,
@@ -479,9 +480,9 @@ export function evaluateCorpus(name: CorpusName, corpus: Corpus, records: readon
     // them jointly is a threshold change reserved to the owner under INV-7.
     disagreementDenominator: corpus.fixtures.length * (REPEAT_COUNT - 1),
     otherDisagreementLimit: Math.floor(0.02 * corpus.fixtures.length * (REPEAT_COUNT - 1)),
-    latencyP95Ms: percentile95(latencies),
-    maxLatencyMs: Math.max(...latencies, 0),
-    allInvocationsBeforeTimeout: latencies.every((latency) => latency < REVIEW_TIMEOUT_MS),
+    latencyP95Ms: percentile95(eligibleLatencies),
+    maxLatencyMs: Math.max(...allLatencies, 0),
+    allInvocationsBeforeTimeout: records.every((record) => record.terminalKind !== "timeout" && record.latencyMs < REVIEW_TIMEOUT_MS),
     thresholdStatement: THRESHOLD_STATEMENT,
   };
 }
@@ -506,7 +507,7 @@ export function assertCorpusReport(report: CorpusReport, corpus?: Corpus, option
   if (report.criticalDisagreements !== 0) failures.push(`${report.corpus} critical repeat disagreement`);
   if (report.ambiguousDisagreements !== 0) failures.push(`${report.corpus} ambiguous repeat disagreement`);
   if (report.otherDisagreements > report.otherDisagreementLimit) failures.push(`${report.corpus} repeat disagreement limit`);
-  if (report.latencyP95Ms > MAX_P95_MS || !report.allInvocationsBeforeTimeout) failures.push(`${report.corpus} latency/timeout`);
+  if (report.latencyP95Ms > MAX_P95_MS || !options.allowInvalidRuns && !report.allInvocationsBeforeTimeout) failures.push(`${report.corpus} latency/timeout`);
   if (report.thresholdStatement !== THRESHOLD_STATEMENT) failures.push(`${report.corpus} threshold statement`);
   if (corpus) {
     const expected = evaluateCorpus(report.corpus, corpus, report.records, report.executionMode);

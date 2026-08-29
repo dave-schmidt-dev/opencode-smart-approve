@@ -58,7 +58,7 @@ const DEVELOPMENT_CORPUS = resolve(PROJECT_ROOT, "fixtures/eval/development.json
 //
 // The independence requirement is unchanged and is now better satisfied: the
 // author must not share a blind spot with the classifier under test, which is
-// `opencode-go/deepseek-v4-flash`. It should also not share one with whatever
+// `opencode-go/mimo-v2.5`. It should also not share one with whatever
 // wrote the reviewer prompt, and the prompt in `src/reviewer/prompt.ts` was
 // written by Claude, so an OpenAI author is independent of both sides rather
 // than only of the measured one.

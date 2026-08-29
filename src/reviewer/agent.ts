@@ -127,10 +127,21 @@ function toolCountersFrom(value: unknown): ToolCounters {
   return Object.values(observed).some((count) => count > 0) ? observed : ZERO_TOOL_COUNTERS;
 }
 
-function reasonFor(error: unknown): ReviewReasonCode {
-  if (error instanceof ReviewerParseError) return error.reasonCode;
-  if (error instanceof Error && /timeout/i.test(error.message)) return "timeout";
-  return "provider_error";
+class ReviewerDeadlineError extends Error {
+  constructor() {
+    super("reviewer deadline exceeded");
+    this.name = "ReviewerDeadlineError";
+  }
+}
+
+function failureDetailsFor(error: unknown): {
+  readonly reasonCode: ReviewReasonCode;
+  readonly reason?: "reviewer_deadline" | "upstream_timeout";
+} {
+  if (error instanceof ReviewerDeadlineError) return { reasonCode: "timeout", reason: "reviewer_deadline" };
+  if (error instanceof ReviewerParseError) return { reasonCode: error.reasonCode };
+  if (error instanceof Error && /timeout/i.test(error.message)) return { reasonCode: "timeout", reason: "upstream_timeout" };
+  return { reasonCode: "provider_error" };
 }
 
 function outcomeFor(
@@ -293,7 +304,7 @@ export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgen
         ? await prompt
         : await Promise.race([
           prompt,
-          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("reviewer timeout")), timeoutMs); }),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ReviewerDeadlineError()), timeoutMs); }),
         ]);
       const parsed = parseReviewerResponse(response);
       const toolCounters = toolCountersFrom(response);
@@ -310,8 +321,8 @@ export function createReviewerAgent(options: ReviewerAgentOptions): ReviewerAgen
       return { ...parsed, requestID: request.requestID, coordinatorID, sessionID, toolCounters, outcome };
     } catch (error) {
       // Never echo provider/error text: it may contain command or secret bytes.
-      const reasonCode = reasonFor(error);
-      const fallback = manualReviewerResponse(reasonCode);
+      const { reasonCode, reason } = failureDetailsFor(error);
+      const fallback = manualReviewerResponse(reasonCode, reason);
       const outcome = outcomeFor(coordinatorID, sessionID, undefined, reasonCode, providerAttempted);
       return { ...fallback, requestID: request.requestID, coordinatorID, sessionID, toolCounters: ZERO_TOOL_COUNTERS, outcome };
     } finally {
