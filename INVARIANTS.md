@@ -1,5 +1,9 @@
 # Invariants — opencode-smart-approve
 
+> **Retired failed experiment.** This project is retired and non-deployable.
+> The invariants and technical history below are retained as historical evidence;
+> see [FAILURE.md](FAILURE.md).
+
 > System contract. The harvest tool reads `area:` globs to map HISTORY bug entries
 > to invariants.
 
@@ -135,7 +139,5 @@ budget, duplicate/stale handling, exact-runtime activation, and native-prompt
 fallthrough on ambiguity or error prevent the correction signal from becoming
 an execution bypass. Read-only decomposition carries only bounded returned text
 through sequential native calls and never recreates a pipeline in Bash.
-Current static feedback never captures goal context or runtime values. Owner-
-authorized goal-aware redirection is not implemented; any future extension must
-preserve this pre-execution, bounded, manual-dominant contract and must not
-execute or rewrite commands, reply to permission requests, or approve them.
+Current static feedback never captures goal context or runtime values.
+Goal-aware redirection was not implemented before retirement.

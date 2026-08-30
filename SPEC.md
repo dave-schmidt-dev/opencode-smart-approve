@@ -1,17 +1,21 @@
 # SPEC: OpenCode Smart Approve
 
-Status: implemented MVP; MiMo release qualification failed; DeepSeek low default is next unqualified candidate
+Status: Retired failed experiment; non-deployable
 PlanningTier: impulse
 Target: OpenCode 1.18.10 on macOS and Linux
 License: MIT
 
+> **Retired.** This specification and the technical history below are retained
+> as historical evidence. The project must not be deployed to approve shell
+> permissions; see [FAILURE.md](FAILURE.md).
+
 ## 1. Purpose
 
-OpenCode Smart Approve reduces repetitive shell approval prompts without weakening
+OpenCode Smart Approve attempted to reduce repetitive shell approval prompts without weakening
 OpenCode's native permission boundary. It automatically replies to a pending shell
 permission only when a mandatory constrained model review supports approval. The
-current build has not qualified its candidate model, so model-backed automatic
-approval remains disabled.
+experiment never qualified a candidate model, so model-backed automatic approval
+remains permanently disabled.
 Deterministic parsing and policy may force manual handling but never grant permission
 in the MVP. Every uncertain outcome remains an ordinary human choice. REQ-014 is a
 separate disabled-by-default pre-execution block that never grants permission and
@@ -25,8 +29,8 @@ commands proceeding without user action, every candidate command being reviewed 
 a qualified selected-profile reviewer, and no error path turning into an automatic
 approval. The current build does not meet that outcome: the MiMo candidate passed
 development and attended smoke but failed its candidate-bound private release
-draw. MiMo remains failed historical evidence; the DeepSeek low default
-is the next unqualified candidate. Model-backed automatic approval remains disabled.
+draw. MiMo remains failed historical evidence; the final DeepSeek low candidate
+also failed release usability. Model-backed automatic approval remains permanently disabled.
 
 ## 3. Scope
 
@@ -494,8 +498,8 @@ flagged as a probable third systematic case, explicitly uninvestigated,
 because investigating it would require the same disclosure-risking probe
 used above and no further such probes are being run against this corpus.
 
-DeepSeek V4 Flash `low` is the disabled production default and next unqualified
-candidate; model-backed automatic approval must remain disabled. MiMo V2.5 also
+DeepSeek V4 Flash `low` was the final disabled candidate and failed release
+usability; model-backed automatic approval must remain permanently disabled. MiMo V2.5 also
 is not qualified: it passed development but failed its one-use release draw and
 remains failed historical evidence. The blocker is no longer purely a model/prompt-wording
 question: it is a design contradiction between the reviewer prompt's
@@ -836,10 +840,8 @@ now require a fresh draw.
     decomposes work into sequential native calls carrying only bounded returned
     text and never recreates a pipeline as separate Bash commands, wrappers,
     substitutions, or loops. The current static guidance does not capture goal
-    context or interpolate runtime values. Owner-authorized goal-aware or
-    goal-specific redirection is future work, not implemented here; any future
-    extension must remain pre-execution and must not execute or rewrite commands,
-    reply to permission requests, or approve them.
+    context or interpolate runtime values. Goal-aware or goal-specific
+    redirection was not implemented before retirement.
   - [ ] One user-message generation may reserve at most three distinct blocked
     calls; duplicate delivery is idempotent, stale or exhausted calls fall
     through to the native Bash prompt, and a new user message resets only its
@@ -907,9 +909,9 @@ permission authority without schema, state, and deterministic hard-block checks.
 1. Shell permission requests only.
 2. Native `bash: ask` remains enabled.
 3. Every automatic approval requires model review; deterministic policy cannot grant.
-4. DeepSeek V4 Flash `low` is the disabled production default and next
-   unqualified candidate. MiMo V2.5 remains registered as failed historical
-   evidence and no profile is trusted until qualification.
+4. DeepSeek V4 Flash `low` was the final disabled candidate and failed release
+   usability. MiMo V2.5 remains registered as failed historical evidence; no
+   profile is trusted or scheduled for qualification.
 5. Repeated commands are re-evaluated and re-reviewed; verdicts are not cached.
 6. Automatic replies use `once` only.
 7. Default model timeout is 30 seconds and progress is visible.

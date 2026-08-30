@@ -1,5 +1,9 @@
 # Requirement traceability
 
+> **Retired failed experiment.** This project is retired and non-deployable.
+> This map and the technical history below are retained as historical evidence;
+> see [FAILURE.md](FAILURE.md).
+
 This release map is separate from the local-only task queue and history.
 
 | Task | Requirements | Tests |
@@ -103,7 +107,5 @@ in `tests/security/audit-redaction.test.ts`, bounded progress coverage in
 `tests/e2e/opencode-1.18.10.test.ts`. No replan evidence may map to a permission
 reply path.
 
-The evidence map covers the implemented static catalog only. Owner-authorized
-goal-aware redirection is future work, not implemented by this release; any
-future extension must preserve pre-execution operation and must not execute or
-rewrite commands, reply to permission requests, or approve them.
+The evidence map covers the implemented static catalog only. Goal-aware
+redirection was not implemented before retirement.

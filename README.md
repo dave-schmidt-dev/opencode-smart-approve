@@ -1,12 +1,17 @@
 # OpenCode Smart Approve
 
+> **Status: Retired failed experiment.** This project is retired and
+> non-deployable. See [FAILURE.md](FAILURE.md) for the postmortem. The technical
+> history below is retained as historical evidence only; do not install or use
+> this project to automatically approve shell permissions.
+
 OpenCode Smart Approve is a TypeScript plugin that automatically answers
 OpenCode shell permission requests only when a command is demonstrably safe. It
 keeps OpenCode's native `bash: ask` posture, replies with `once`, and leaves the
 ordinary human prompt in place whenever parsing, policy, model review, or plugin
 execution is uncertain.
 
-## MVP implementation status
+## Historical MVP implementation status
 
 - Target OpenCode 1.18.10 first.
 - Handle shell (`bash`) permission requests only.
@@ -25,7 +30,7 @@ OpenCode, its configured provider, and other loaded plugins remain trusted.
 
 - `SPEC.md` defines requirements and locked MVP decisions.
 - `TRACEABILITY.md` maps requirements to implementation tasks and concrete tests.
-- `INVARIANTS.md` defines contracts every future change must preserve.
+- `INVARIANTS.md` records the contracts enforced during the experiment.
 - `ledger.yaml` records invariant gate coverage.
 The MVP implementation is present. The source-current v5 command-safety corpus
 contains 114 fixtures and routes 60 fixtures to the reviewer. Timeout
@@ -34,10 +39,10 @@ attribution proved that a source-current DeepSeek `max` draw hit the local
 candidate completed a `development-pass` but its one-use machine release draw
 returned `machine-release-fail`: 6/70 critical false approvals, 17/199 benign
 false manuals (limit 10), one malformed run, and 8.585-second p95 latency.
-MiMo remains registered as failed historical evidence. The DeepSeek V4 Flash
-`low` profile is now the disabled production default and next unqualified
-candidate. Model-backed automatic approval remains disabled. No task-relevance
-or CI action ran.
+MiMo remains registered as failed historical evidence. DeepSeek V4 Flash `low`
+was the final disabled candidate; its release draw also failed usability with
+15/200 benign false manuals and 9 other disagreements. Model-backed automatic
+approval remains permanently disabled. No task-relevance or CI action ran.
 
 `eval-results/` is not committed. Run
 `bun run scripts/classifier-gate.ts --validate-candidate
@@ -68,26 +73,17 @@ then falls through to OpenCode's native Bash permission prompt. Replan never
 executes or rewrites a command, replies to a permission request, or guarantees
 task completion.
 
-Static prompt tuning is stopped. The current enriched catalog is retained;
-the compact-catalog candidate remains test-only and was not promoted. Goal-aware
-or goal-specific redirection is owner-authorized future work, not implemented in
-this build. Any future extension must remain pre-execution and preserve the
-boundaries above: it must not execute or rewrite commands, reply to permission
-requests, or approve them.
+Static prompt tuning and goal-aware redirection were abandoned when the project
+was retired. The enriched catalog and compact test candidate remain only as
+historical evidence; no continuation is planned.
 
-## Installation and removal
+## Historical installation and removal
 
-This repository is not published to npm. A local checkout may be linked from the
-global OpenCode plugin loader for evaluation; keep native `bash: ask` enabled.
-`model.enabled=true` cannot enable automatic approvals in this release. Remove the
-loader entry to restore stock OpenCode; no session-data edit is required. OpenCode
-1.18.10 is the tested compatibility target, not a model qualification. DeepSeek
-V4 Flash `low` is the disabled production default and next unqualified candidate; its
-runtime request includes variant `low`. `src/reviewer/model-profile.ts` is the single
-registry for production and qualification identities; MiMo V2.5 remains as
-failed historical evidence.
+This repository is not published to npm and must not be installed or deployed.
+The remaining details in this section describe the retired experiment only. The
+native OpenCode `bash: ask` posture remains the appropriate permission boundary.
 
-## Development verification
+## Historical development verification
 
 The disposable OpenCode checks use the pinned local `opencode-ai@1.18.10` binary
 by default. They isolate config, data, state, and cache under a temporary root and
